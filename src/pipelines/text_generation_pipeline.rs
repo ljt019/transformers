@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use crate::gemma_3_quantized::ModelConfig;
-use crate::gemma_3_quantized::ModelParams;
-use crate::gemma_3_quantized::QuantizedGemma3Model;
+use crate::models::quantized::gemma_3_quantized::ModelConfig;
+use crate::models::quantized::gemma_3_quantized::ModelParams;
+use crate::models::quantized::gemma_3_quantized::QuantizedGemma3Model;
 
 /*
 let pipeline = TextGeneratorPipeline::new('gemma-3-1b-it-quantized');
