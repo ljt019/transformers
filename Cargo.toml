@@ -1,6 +1,6 @@
 [package]
 name = "rustformers"
-description = "a transformers like interface for interacting with local LLMs"
+description = "A transformers like interface for interacting with local LLMs"
 version = "0.0.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
