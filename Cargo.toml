@@ -1,0 +1,9 @@
+[package]
+name = "rustformers"
+description = "Rust transformers"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ljt019/rustformers/"
+
+[dependencies]
