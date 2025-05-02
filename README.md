@@ -65,3 +65,7 @@ fn main() -> Result<()> {
 - Add more model families and sizes
 - Support additional pipelines (summarization, classification)
 - Improve performance and error handling
+
+## Credits
+
+A special thanks to [Diaconu Radu-Mihai](@https://github.com/radudiaconu0/) for transferring the `transformers` crate name on crates.io.
