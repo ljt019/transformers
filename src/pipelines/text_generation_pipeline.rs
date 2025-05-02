@@ -1,86 +1,205 @@
-use std::path::PathBuf;
-
-use crate::models::quantized::gemma_3_quantized::ModelConfig;
-use crate::models::quantized::gemma_3_quantized::ModelParams;
 use crate::models::quantized::gemma_3_quantized::QuantizedGemma3Model;
+use crate::models::quantized::phi_4_quantized::QuantizedPhi4Model;
+use crate::utils::ModelConfig;
 
-/*
-let pipeline = TextGeneratorPipeline::new('gemma-3-1b-it-quantized');
+use crate::utils::{GenerationParams, HfConfig};
+use tokenizers::Tokenizer;
 
-prompt = "Hello, how are you?";
+/// Available Gemma3 model sizes (e.g., 1B, 4B, 12B, 27B).
+pub enum Gemma3Size {
+    Size1B,
+    Size4B,
+    Size12B,
+    Size27B,
+}
 
-let generated_text = pipeline.generate_text(prompt, max_length);
-*/
+/// Available Phi4 model sizes (e.g., 14B).
+pub enum Phi4Size {
+    Size14B,
+}
 
-use crate::utils::HfConfig;
-
+/// High-level selection of model family/architecture.
+///
+/// You must also specify the size of the model you want to use.
+///
+/// Example:
+/// ```rust
+/// let model_choice = ModelOptions::Gemma3(Gemma3Size::Size1B)
+/// ```
 pub enum ModelOptions {
-    Gemma3_1b,
+    Gemma3(Gemma3Size),
+    Phi4(Phi4Size),
 }
 
-pub struct TextGenerationPipelineBuilder {
-    model_choice: Option<ModelOptions>,
-}
-
-impl TextGenerationPipelineBuilder {
-    pub fn new() -> Self {
-        Self { model_choice: None }
-    }
-
-    pub fn set_model_choice(mut self, model_choice: ModelOptions) -> Self {
-        self.model_choice = Some(model_choice);
-        self
-    }
-
-    pub fn build(self) -> anyhow::Result<TextGenerationPipeline> {
-        if !self.model_choice.is_some() {
-            return Err(anyhow::anyhow!("Model choice is not set"));
-        }
-
-        let model_choice = self.model_choice.unwrap();
-
-        let model_config = match model_choice {
-            ModelOptions::Gemma3_1b => ModelConfig::new(
-                ModelParams::default(),
-                HfConfig::new(
+impl ModelOptions {
+    /// Map each ModelOptions variant to its HfConfig
+    pub fn hf_config(&self) -> HfConfig {
+        match self {
+            ModelOptions::Gemma3(size) => match size {
+                Gemma3Size::Size1B => HfConfig::new(
                     "google/gemma-3-1b-it",
                     "tokenizer.json",
                     "unsloth/gemma-3-1b-it-GGUF",
                     "gemma-3-1b-it-Q4_K_M.gguf",
                 ),
-            ),
-        }?;
+                Gemma3Size::Size4B => HfConfig::new(
+                    "google/gemma-3-4b-it",
+                    "tokenizer.json",
+                    "unsloth/gemma-3-4b-it-GGUF",
+                    "gemma-3-4b-it-Q4_K_M.gguf",
+                ),
+                Gemma3Size::Size12B => HfConfig::new(
+                    "google/gemma-3-12b-it",
+                    "tokenizer.json",
+                    "unsloth/gemma-3-12b-it-GGUF",
+                    "gemma-3-12b-it-Q4_K_M.gguf",
+                ),
+                Gemma3Size::Size27B => HfConfig::new(
+                    "google/gemma-3-27b-it",
+                    "tokenizer.json",
+                    "unsloth/gemma-3-27b-it-GGUF",
+                    "gemma-3-27b-it-Q4_K_M.gguf",
+                ),
+            },
+            ModelOptions::Phi4(size) => match size {
+                Phi4Size::Size14B => HfConfig::new(
+                    "microsoft/phi-4",
+                    "tokenizer.json",
+                    "microsoft/phi-4-gguf",
+                    "phi-4-q4.gguf",
+                ),
+            },
+        }
+    }
 
-        TextGenerationPipeline::new(model_config)
+    /// Construct the quantized model instance and return with its HfConfig
+    pub(crate) fn build_model(
+        self,
+        params: GenerationParams,
+    ) -> anyhow::Result<(HfConfig, Box<dyn LargeLanguageModel>)> {
+        let hf = self.hf_config();
+        let cfg = ModelConfig::new(params, hf.clone())?;
+        let model: Box<dyn LargeLanguageModel> = match self {
+            ModelOptions::Gemma3(_) => Box::new(QuantizedGemma3Model::new(cfg)?),
+            ModelOptions::Phi4(_) => Box::new(QuantizedPhi4Model::new(cfg)?),
+        };
+        Ok((hf, model))
     }
 }
 
+/// Builder for configuring and constructing a text generation pipeline.
+///
+/// Start by creating a builder with `new(ModelOptions)`, then chain optional settings:
+/// - `.temperature(f64)`: sampling temperature (default: DEFAULT_TEMPERATURE)
+/// - `.repeat_penalty(f32)`: penalty for repeated tokens (default: DEFAULT_REPEAT_PENALTY)
+/// - `.repeat_last_n(usize)`: context length for repeat penalty (default: DEFAULT_REPEAT_LAST_N)
+/// - `.seed(u64)`: random seed (default: DEFAULT_SEED)
+/// - `.use_flash_attn(bool)`: enable flash attention for supported models (default: false)
+///
+/// Finally, call `.build()` to obtain a `TextGenerationPipeline`.
+pub struct TextGenerationPipelineBuilder {
+    model_choice: ModelOptions,
+    temperature: Option<f64>,
+    repeat_penalty: Option<f32>,
+    repeat_last_n: Option<usize>,
+    seed: Option<u64>,
+    use_flash_attn: Option<bool>,
+}
+
+impl TextGenerationPipelineBuilder {
+    pub fn new(model_choice: ModelOptions) -> Self {
+        Self {
+            model_choice,
+            temperature: None,
+            repeat_penalty: None,
+            repeat_last_n: None,
+            seed: None,
+            use_flash_attn: None,
+        }
+    }
+
+    pub fn temperature(mut self, temperature: f64) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn repeat_penalty(mut self, repeat_penalty: f32) -> Self {
+        self.repeat_penalty = Some(repeat_penalty);
+        self
+    }
+
+    pub fn repeat_last_n(mut self, repeat_last_n: usize) -> Self {
+        self.repeat_last_n = Some(repeat_last_n);
+        self
+    }
+
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    pub fn use_flash_attn(mut self, use_flash_attn: bool) -> Self {
+        self.use_flash_attn = Some(use_flash_attn);
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<TextGenerationPipeline> {
+        let temperature = self.temperature.unwrap_or(crate::DEFAULT_TEMPERATURE);
+        let repeat_penalty = self.repeat_penalty.unwrap_or(crate::DEFAULT_REPEAT_PENALTY);
+        let repeat_last_n = self.repeat_last_n.unwrap_or(crate::DEFAULT_REPEAT_LAST_N);
+        let seed = self.seed.unwrap_or(crate::DEFAULT_SEED);
+        let use_flash_attn = self.use_flash_attn.unwrap_or(false);
+
+        let generation_params = GenerationParams::new(
+            temperature,
+            repeat_penalty,
+            repeat_last_n,
+            seed,
+            use_flash_attn,
+        );
+
+        // Build the HfConfig and model in one go via the nested enum helper
+        let (hf_config, model) = self.model_choice.build_model(generation_params)?;
+
+        let tokenizer = crate::utils::load_tokenizer(&hf_config)?;
+
+        Ok(TextGenerationPipeline { model, tokenizer })
+    }
+}
+
+/// A ready-to-use pipeline for generating text using a quantized model.
+///
+/// After building with `TextGenerationPipelineBuilder`, call
+/// `generate_text(prompt, max_length)` to produce text completions.
+///
+/// Example:
+/// ```rust
+/// let pipeline = TextGenerationPipelineBuilder::new(
+///     ModelOptions::Gemma3(Gemma3Size::Size1B),
+/// )
+/// .temperature(0.7)
+/// .build()?;
+///
+/// let output = pipeline.generate_text("What is the meaning of life?", 50)?;
+///
+/// println!("{}", output);
+/// ```
 pub struct TextGenerationPipeline {
+    /// Tokenizer corresponding to the model's vocabulary.
     model: Box<dyn LargeLanguageModel>,
-    tokenizer: tokenizers::Tokenizer,
+    tokenizer: Tokenizer,
 }
 
 impl TextGenerationPipeline {
-    pub fn new(model_config: ModelConfig) -> anyhow::Result<Self> {
-        let gemma_model = QuantizedGemma3Model::new(model_config.clone())?;
-
-        let tokenizer = crate::utils::load_tokenizer(&model_config.hf_config)?;
-
-        Ok(TextGenerationPipeline {
-            model: Box::new(gemma_model),
-            tokenizer,
-        })
-    }
-
     pub fn generate_text(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
         self.model.prompt_model(&self.tokenizer, prompt, max_length)
     }
 }
 
-pub trait LargeLanguageModel {
+pub(crate) trait LargeLanguageModel {
     fn prompt_model(
         &self,
-        tokenizer: &tokenizers::Tokenizer,
+        tokenizer: &Tokenizer,
         prompt: &str,
         max_length: usize,
     ) -> anyhow::Result<String>;
