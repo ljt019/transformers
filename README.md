@@ -1,71 +1,67 @@
-# rustformers
+# rustformers v0.0.2
 
 > ⚠️ **Work in Progress** ⚠️
 >
-> This project is currently under active development. The API may change, and features are still being added.
-> Currently, only the `gemma-3-1b-it` model is supported.
+> This crate is under active development. APIs may change as features are still being added.
+> Current supported models:
+>
+> - Gemma3: sizes 1B, 4B, 12B, 27B
+> - Phi4: size 14B
 
-My goal with this crate is to provide a simple and idiomatic Rust interface for using popular local Large Language Models (LLMs), leveraging the [Candle](https://github.com/huggingface/candle) framework. While Candle enables working with LLMs in Rust, this crate aims to offer an API inspired by [Python's transformers](https://huggingface.co/docs/transformers) library, but tailored for Rust developers.
+Rustformers provides a simple, idiomatic Rust interface for running local large language models (LLMs) via the [Candle](https://github.com/huggingface/candle) framework. It offers an API inspired by Python's [transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
-Currently, `rustformers` supports a basic text generation pipeline.
+## Installation
 
-## Getting Started
-
-Add `rustformers` to your `Cargo.toml`:
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rustformers = { git = "https://github.com/your-username/rustformers.git" } # Replace with actual path/version when published
-anyhow = "1.0"
+rustformers = "0.0.2"
 ```
 
-## Example Usage
+or
 
-Here's a basic example demonstrating how to use the text generation pipeline with the Gemma 3.1b model:
+```cmd
+cargo add rustformers
+```
+
+## Usage
 
 ```rust
 use anyhow::Result;
-use rustformers::pipelines::text_generation_pipeline::*;
+use rustformers::pipelines::text_generation_pipeline::{
+    TextGenerationPipelineBuilder, ModelOptions, Gemma3Size, Phi4Size,
+};
 
 fn main() -> Result<()> {
-    println!("Building pipeline...");
+    // 1. Choose a model family and size
+    let model_choice = ModelOptions::Gemma3(Gemma3Size::Size1B);
+    // alternatively:
+    // let model_choice = ModelOptions::Phi4(Phi4Size::Size14B);
 
-    // 1. Create the builder
-    let builder = TextGenerationPipelineBuilder::new();
+    // 2. Build the pipeline with optional parameters
+    let pipeline = TextGenerationPipelineBuilder::new(model_choice)
+        .temperature(0.7)
+        .repeat_penalty(1.1)
+        .use_flash_attn(true) // only used by some models, probably will handle automatically soon
+        .build()?;
 
-    // 2. Set the model choice
-    // Currently supports ModelOptions::Gemma3_1b
-    let builder = builder.set_model_choice(ModelOptions::Gemma3_1b);
-
-    // 3. Build the pipeline
-    // This might take time as it downloads and loads the model weights
-    let pipeline = builder.build()?;
-    println!("Pipeline built successfully.");
-
-    // 4. Define prompt and max length
-    let prompt = "Explain the concept of Large Language Models in simple terms.";
-    let max_length = 500; // Maximum number of tokens to generate
-
-    println!("Generating text for prompt: '{}'", prompt);
-
-    // 5. Generate text
-    let generated_text = pipeline.generate_text(prompt, max_length)?;
-
-    // 6. Print the result
-    println!("
---- Generated Text ---");
-    println!("{}", generated_text);
-    println!("--- End of Text ---
-");
+    // 3. Generate text
+    let prompt = "What is the meaning of life?";
+    let generated = pipeline.generate_text(prompt, 100)?;
+    println!("{}", generated);
 
     Ok(())
 }
 ```
 
-This example initializes the pipeline, sets the desired model (Gemma 3.1b in this case), builds it (which involves loading the model weights), and then uses it to generate text based on a prompt.
+## Supported Models
+
+- **Gemma3**: `1B`, `4B`, `12B`, `27B`
+- **Phi4**: `14B`
 
 ## Future Plans
 
-* Support more models.
-* Implement other pipeline types (e.g., text classification, summarization).
-* Improve error handling and configuration options.
+- Add more model families and sizes
+- Support additional pipelines (summarization, classification)
+- Improve performance and error handling
