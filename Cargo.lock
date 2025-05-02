@@ -147,8 +147,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "candle-core"
-version = "0.9.0"
-source = "git+https://github.com/huggingface/candle.git#38fc86621ce7dfde7161b61edf94330a1797cb04"
+version = "0.9.1"
 dependencies = [
  "byteorder",
  "gemm 0.17.1",
@@ -168,8 +167,7 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.9.0"
-source = "git+https://github.com/huggingface/candle.git#38fc86621ce7dfde7161b61edf94330a1797cb04"
+version = "0.9.1"
 dependencies = [
  "candle-core",
  "half",
@@ -182,8 +180,7 @@ dependencies = [
 
 [[package]]
 name = "candle-transformers"
-version = "0.9.0"
-source = "git+https://github.com/huggingface/candle.git#38fc86621ce7dfde7161b61edf94330a1797cb04"
+version = "0.9.1"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -1988,7 +1985,7 @@ checksum = "719b953e2095829ee67db738b3bfa9fa368c94900df327b3f07fe6e794d2fe1f"
 
 [[package]]
 name = "rustformers"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "candle-core",
