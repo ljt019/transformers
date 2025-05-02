@@ -1,10 +1,10 @@
 [package]
-name = "rustformers"
+name = "transformers"
 description = "A transformers like interface for interacting with local LLMs"
 version = "0.0.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/ljt019/rustformers/"
+repository = "https://github.com/ljt019/transformers/"
 
 [dependencies]
 anyhow = "1.0.98"
