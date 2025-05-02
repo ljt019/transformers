@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     println!("{}", generated_text);
     println!("--- End of Text ---\n");
 
-    let second_prompt = "Explain the fibbonnaci sequence in simple terms.";
+    let second_prompt = "Explain the fibonacci sequence in simple terms.";
 
     let generated_text = pipeline.generate_text(second_prompt, max_length)?;
 
