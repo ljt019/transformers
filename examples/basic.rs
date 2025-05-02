@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rustformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation_pipeline::*;
 
 fn main() -> Result<()> {
     println!("Building pipeline...");
