@@ -148,7 +148,6 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 [[package]]
 name = "candle-core"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "byteorder",
  "gemm 0.17.1",
@@ -169,7 +168,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "candle-core",
  "half",
@@ -183,7 +181,6 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -1295,7 +1292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -2847,7 +2844,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

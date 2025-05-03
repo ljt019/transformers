@@ -8,9 +8,9 @@ repository = "https://github.com/ljt019/transformers/"
 
 [dependencies]
 anyhow = "1.0.98"
-candle-core = { git = "https://github.com/ljt019/candle", branch = "qwen3_quantized-impl", version = "0.9.1" }
-candle-nn = { git = "https://github.com/ljt019/candle", branch = "qwen3_quantized-impl", version = "0.9.1" }
-candle-transformers = { git = "https://github.com/ljt019/candle", branch = "qwen3_quantized-impl", version = "0.9.1" }
+candle-core = { path = ".external_crate/candle/candle-core", version = "0.9.1" }
+candle-nn = { path = ".external_crate/candle/candle-nn", version = "0.9.1" }
+candle-transformers = { path = ".external_crate/candle/candle-transformers", version = "0.9.1" }
 hf-hub = "0.4.2"
 minijinja = "2.9.0"
 tokenizers = "0.21.1"
