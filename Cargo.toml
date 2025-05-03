@@ -8,10 +8,13 @@ repository = "https://github.com/ljt019/transformers/"
 
 [dependencies]
 anyhow = "1.0.98"
-candle-core = { git = "https://github.com/ljt019/candle", path = "candle-core", version = "0.9.1" }
-candle-nn = { git = "https://github.com/ljt019/candle", path = "candle-nn", version = "0.9.1" }
-candle-transformers = { git = "https://github.com/ljt019/candle", path = "candle-transformers", version = "0.9.1" }
+candle-core = { git = "https://github.com/ljt019/candle", version = "0.9.1" }
+candle-nn = { git = "https://github.com/ljt019/candle", version = "0.9.1" }
+candle-transformers = { git = "https://github.com/ljt019/candle", version = "0.9.1" }
 hf-hub = "0.4.2"
 minijinja = "2.9.0"
 tokenizers = "0.21.1"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
   

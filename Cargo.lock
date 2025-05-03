@@ -147,7 +147,8 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "candle-core"
-version = "0.9.1"
+version = "0.9.2"
+source = "git+https://github.com/ljt019/candle#a19897ddbb42a9f10fac37d8656989ebf9140345"
 dependencies = [
  "byteorder",
  "gemm 0.17.1",
@@ -167,7 +168,8 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.9.1"
+version = "0.9.2"
+source = "git+https://github.com/ljt019/candle#a19897ddbb42a9f10fac37d8656989ebf9140345"
 dependencies = [
  "candle-core",
  "half",
@@ -180,7 +182,8 @@ dependencies = [
 
 [[package]]
 name = "candle-transformers"
-version = "0.9.1"
+version = "0.9.2"
+source = "git+https://github.com/ljt019/candle#a19897ddbb42a9f10fac37d8656989ebf9140345"
 dependencies = [
  "byteorder",
  "candle-core",
@@ -2551,6 +2554,8 @@ dependencies = [
  "candle-transformers",
  "hf-hub",
  "minijinja",
+ "serde",
+ "serde_json",
  "tokenizers",
 ]
 
