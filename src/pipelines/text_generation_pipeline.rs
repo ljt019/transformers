@@ -1,6 +1,5 @@
 use crate::models::quantized::gemma_3_quantized::QuantizedGemma3Model;
 use crate::models::quantized::phi_4_quantized::QuantizedPhi4Model;
-use crate::models::quantized::qwen3_quantized::QuantizedQwen3Model;
 use crate::utils::ModelConfig;
 
 use crate::utils::{GenerationParams, HfConfig};
@@ -19,31 +18,19 @@ pub enum Phi4Size {
     Size14B,
 }
 
-// Available Qwen3 model sizes (e.g., 0.6B, 1.7B, 4B, 8B, 14B, 32B)
-// None of the moe models are supported yet.
-pub enum Qwen3Size {
-    Size0_6B,
-    Size1_7B,
-    Size4B,
-    Size8B,
-    Size14B,
-    Size32B,
-}
-
 /// High-level selection of model family/architecture.
 ///
 /// You must also specify the size of the model you want to use.
 ///
 /// Example:
 /// ```rust
-/// use transformers::pipelines::text_generation_pipeline::{ModelOptions, Qwen3Size};
+/// use transformers::pipelines::text_generation_pipeline::{ModelOptions, Gemma3Size};
 ///
-/// let model_choice = ModelOptions::Qwen3(Qwen3Size::Size0_6B);
+/// let model_choice = ModelOptions::Gemma3(Gemma3Size::Size1B);
 /// ```
 pub enum ModelOptions {
     Gemma3(Gemma3Size),
     Phi4(Phi4Size),
-    Qwen3(Qwen3Size),
 }
 
 impl ModelOptions {
@@ -84,44 +71,6 @@ impl ModelOptions {
                     "phi-4-q4.gguf",
                 ),
             },
-            ModelOptions::Qwen3(size) => match size {
-                Qwen3Size::Size0_6B => HfConfig::new(
-                    "Qwen/Qwen3-0.6B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-0.6B-GGUF",
-                    "Qwen3-0.6B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size1_7B => HfConfig::new(
-                    "Qwen/Qwen3-1.7B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-1.7B-GGUF",
-                    "Qwen3-1.7B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size4B => HfConfig::new(
-                    "Qwen/Qwen3-4B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-4B-GGUF",
-                    "Qwen3-4B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size8B => HfConfig::new(
-                    "Qwen/Qwen3-8B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-8B-GGUF",
-                    "Qwen3-8B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size14B => HfConfig::new(
-                    "Qwen/Qwen3-14B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-14B-GGUF",
-                    "Qwen3-14B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size32B => HfConfig::new(
-                    "Qwen/Qwen3-32B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-32B-GGUF",
-                    "Qwen3-32B-Q4_K_M.gguf",
-                ),
-            },
         }
     }
 
@@ -135,7 +84,6 @@ impl ModelOptions {
         let model: Box<dyn LargeLanguageModel> = match self {
             ModelOptions::Gemma3(_) => Box::new(QuantizedGemma3Model::new(cfg)?),
             ModelOptions::Phi4(_) => Box::new(QuantizedPhi4Model::new(cfg)?),
-            ModelOptions::Qwen3(_) => Box::new(QuantizedQwen3Model::new(cfg)?),
         };
         Ok((hf, model))
     }
