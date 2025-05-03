@@ -1,6 +1,7 @@
 mod models;
-pub mod pipelines;
 mod utils;
+
+pub mod pipelines;
 
 pub(crate) const DEFAULT_TEMPERATURE: f64 = 0.7;
 pub(crate) const DEFAULT_REPEAT_PENALTY: f32 = 1.1;
