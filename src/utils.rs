@@ -4,7 +4,6 @@ use candle_core::{CudaDevice, Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::quantized_gemma3;
 use candle_transformers::models::quantized_phi3;
-use candle_transformers::models::quantized_qwen3;
 use hf_hub;
 use std::cell::RefCell;
 use std::fs::File;
@@ -105,24 +104,6 @@ pub fn load_phi3_model_weights(
     let mut file = File::open(&model_path)?;
     let content = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
     quantized_phi3::ModelWeights::from_gguf(use_flash_attn, content, &mut file, device)
-        .map_err(anyhow::Error::from)
-}
-
-/// Loads Qwen3 GGUF model weights (used for qwen3_quantized)
-pub fn load_qwen3_model_weights(
-    device: &Device,
-    hf_config: &HfConfig,
-) -> anyhow::Result<quantized_qwen3::ModelWeights> {
-    let model_path = {
-        let api = hf_hub::api::sync::Api::new()?;
-        let repo = hf_config.model_repo.clone();
-        let api = api.model(repo.to_string());
-        api.get(hf_config.model_filename.as_str())?
-    };
-
-    let mut file = File::open(&model_path)?;
-    let content = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
-    quantized_qwen3::ModelWeights::from_gguf(content, &mut file, device)
         .map_err(anyhow::Error::from)
 }
 

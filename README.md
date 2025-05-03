@@ -1,24 +1,14 @@
-# transformers v0.0.3
+# transformers v0.0.2
 
 > This crate is under active development. APIs may change as features are still being added.
 > Current supported models:
 >
-> - Qwen3: sizes 0.6B, 1.7B, 4B, 8B, 14B, 32B
 > - Gemma3: sizes 1B, 4B, 12B, 27B
 > - Phi4: size 14B
 
 Transformers provides a simple, idiomatic Rust interface for running local large language models (LLMs) via the [Candle](https://github.com/huggingface/candle) framework. It offers an API inspired by Python's [transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
 ## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-transformers = "0.0.2"
-```
-
-or
 
 ```cmd
 cargo add transformers
@@ -28,12 +18,12 @@ cargo add transformers
 
 ```rust
 use transformers::pipelines::text_generation_pipeline::{
-    TextGenerationPipelineBuilder, ModelOptions, Qwen3Size,
+    TextGenerationPipelineBuilder, ModelOptions, Gemma3Size,
 };
 
 fn main() {
     // 1. Choose a model family and size
-    let model_choice = ModelOptions::Qwen3(Qwen3Size::Size1_7B);
+    let model_choice = ModelOptions::Gemma3(Gemma3Size::Size4B);
 
     // 2. Build the pipeline with optional parameters
     let pipeline = TextGenerationPipelineBuilder::new(model_choice)
@@ -42,7 +32,7 @@ fn main() {
         .build().unwrap();
 
     // 3. Generate text
-    let prompt = "What is the meaning of life?";
+    let prompt = "Explain the concept of Large Language Models in simple terms.";
     let max_tokens = 100;
 
     let generated = pipeline.generate_text(prompt, max_tokens).unwrap();
@@ -52,7 +42,6 @@ fn main() {
 
 ## Supported Models
 
-- **Qwen3**: `0.6B`, `1.7B`, `4B`, `8B`, `14B`, `32B`
 - **Gemma3**: `1B`, `4B`, `12B`, `27B`
 - **Phi4**: `14B`
 
