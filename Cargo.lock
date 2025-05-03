@@ -148,7 +148,6 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 [[package]]
 name = "candle-core"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "byteorder",
  "gemm 0.17.1",
@@ -169,7 +168,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "candle-core",
  "half",
@@ -183,7 +181,6 @@ dependencies = [
 [[package]]
 name = "candle-transformers"
 version = "0.9.1"
-source = "git+https://github.com/ljt019/candle?branch=qwen3_quantized-impl#c9a37f0d382b1be4cb49a7eb51cbb8d40375d84c"
 dependencies = [
  "byteorder",
  "candle-core",
