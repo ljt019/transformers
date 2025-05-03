@@ -27,12 +27,11 @@ cargo add transformers
 ## Usage
 
 ```rust
-use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::{
     TextGenerationPipelineBuilder, ModelOptions, Qwen3Size,
 };
 
-fn main() -> Result<()> {
+fn main() {
     // 1. Choose a model family and size
     let model_choice = ModelOptions::Qwen3(Qwen3Size::Size1_7B);
 
@@ -40,16 +39,14 @@ fn main() -> Result<()> {
     let pipeline = TextGenerationPipelineBuilder::new(model_choice)
         .temperature(0.7)
         .repeat_penalty(1.1)
-        .build()?;
+        .build().unwrap();
 
     // 3. Generate text
     let prompt = "What is the meaning of life?";
     let max_tokens = 100;
 
-    let generated = pipeline.generate_text(prompt, max_tokens)?;
+    let generated = pipeline.generate_text(prompt, max_tokens).unwrap();
     println!("{}", generated);
-
-    Ok(())
 }
 ```
 
