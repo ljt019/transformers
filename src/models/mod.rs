@@ -2,6 +2,7 @@ pub mod raw;
 
 pub mod modern_bert;
 pub mod sentiment_modern_bert;
+pub mod zero_shot_modern_bert;
 
 pub mod gemma_3;
 pub mod phi_4;
