@@ -1,4 +1,4 @@
-use crate::models::raw::quantized_qwen3;
+use crate::models::raw::models::quantized_qwen3;
 
 use crate::utils::{self, load_qwen3_model_weights, ModelConfig, QuantizedModelWeights};
 
@@ -22,7 +22,7 @@ impl QuantizedQwen3Model {
         let loader = || load_qwen3_model_weights(&config.device, &config.hf_config);
 
         // Use the generic initializer
-        let weights = utils::init_quantized("Qwen3", loader)?;
+        let weights = utils::init_quantized(loader)?;
 
         // Define the prompt formatter for Qwen3
         let format_prompt = |prompt: &str| -> String {

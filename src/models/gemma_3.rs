@@ -1,4 +1,4 @@
-use candle_transformers::models::quantized_gemma3;
+use crate::models::raw::models::quantized_gemma3;
 
 use crate::utils::{self, load_gemma3_model_weights, ModelConfig};
 
@@ -11,7 +11,7 @@ impl QuantizedGemma3Model {
         let loader = || load_gemma3_model_weights(&config.device, &config.hf_config);
 
         // Use the generic initializer
-        let weights = utils::init_quantized("Gemma3", loader)?;
+        let weights = utils::init_quantized(loader)?;
 
         // Define the prompt formatter for Gemma3
         let format_prompt = |prompt: &str| -> String {

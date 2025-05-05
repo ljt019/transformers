@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     println!("--- End ---\n");
 
     // Example 2
-    let prompt2 = "Hello I'm a [MASK] model.";
+    let prompt2 = "I'm a [MASK] model.";
     println!("Filling mask for prompt: '{}'", prompt2);
     let filled_text2 = pipeline.fill_mask(prompt2)?;
     println!("\n--- Result 2 ---");
