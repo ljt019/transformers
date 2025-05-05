@@ -23,7 +23,7 @@
 //! # fn main() -> Result<()> {
 //! // Use the builder to specify the model size
 //! let pipeline = ZeroShotClassificationPipelineBuilder::new(
-//!     ZeroShotModernBertSize::Large // Currently only Large is supported for zero-shot
+//!     ZeroShotModernBertSize::Large
 //! ).build()?;
 //!
 //! let premise = "The Federal Reserve raised interest rates citing inflationary pressures.";
