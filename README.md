@@ -18,7 +18,7 @@
 >   - ModernBERT (Base, Large)
 >
 > - Sentiment Analysis:
->   - ModernBERT Finetune (Base, Large)
+>   - ModernBERT Sentiment Finetune (Base, Large)
 >
 > - Zero-Shot Classification:
 >   - ModernBERT NLI Finetune (Base, Large)
