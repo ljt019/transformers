@@ -66,10 +66,7 @@ impl GenerationParams {
 pub fn load_device() -> anyhow::Result<Device> {
     match CudaDevice::new_with_stream(0) {
         Ok(cuda_device) => Ok(Device::Cuda(cuda_device)),
-        Err(err) => {
-            println!("CUDA not available, using CPU: {}", err);
-            Ok(Device::Cpu)
-        }
+        Err(_) => Ok(Device::Cpu),
     }
 }
 
@@ -172,13 +169,11 @@ impl QuantizedModelWeights for quantized_phi3::ModelWeights {
 }
 
 /// Helper to initialize quantized model weights with logging.
-pub fn init_quantized<M, F>(model_name: &str, load_fn: F) -> anyhow::Result<RefCell<M>>
+pub fn init_quantized<M, F>(load_fn: F) -> anyhow::Result<RefCell<M>>
 where
     F: FnOnce() -> anyhow::Result<M>,
 {
-    println!("Loading {} model (this might take a while)...", model_name);
     let weights = load_fn()?;
-    println!("{} model loaded successfully.", model_name);
     Ok(RefCell::new(weights))
 }
 

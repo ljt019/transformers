@@ -21,7 +21,7 @@ impl QuantizedPhi4Model {
         };
 
         // Use the generic initializer
-        let weights = utils::init_quantized("Phi4", loader)?;
+        let weights = utils::init_quantized(loader)?;
 
         // Define the prompt formatter for Phi (identity function)
         let format_prompt = |prompt: &str| -> String { prompt.to_string() };

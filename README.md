@@ -1,16 +1,19 @@
-# transformers v0.0.4
+# transformers v0.0.5
 
 > This crate is under active development. APIs may change as features are still being added.
 >
 > **Supported Pipelines so far:**
 >
 > - Text Generation:
->   - Qwen3 (0.6B, 1.7B, 4B, 8B, 14B, 32B) *moe not implemented yet*
+>   - Qwen3 (0.6B, 1.7B, 4B, 8B, 14B, 32B) *no moe yet*
 >   - Gemma3 (1B, 4B, 12B, 27B)
 >   - Phi4 (14B)
 >
 > - Fill-Mask:
 >   - ModernBERT (Base, Large)
+>
+> - Sentiment Analysis:
+>   - ModernBERT Finetune (Base, Large)
 
 Transformers provides a simple, idiomatic Rust interface for running local large language models (LLMs) via the [Candle](https://github.com/huggingface/candle) framework. It offers an API inspired by Python's [transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
@@ -22,7 +25,7 @@ cargo add transformers
 
 ## Usage
 
-At this point in development the only real way to interact with the models is through the given pipelines, I plan to eventually allow you to work with the models directly. 
+At this point in development the only real way to interact with the models is through the given pipelines, I plan to eventually allow you to work with the models directly.
 
 Some examples of how to use pipelines:
 
@@ -75,6 +78,29 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Sentiment Analysis (ModernBERT Finetune)
+
+```rust
+use transformers::pipelines::sentiment_analysis_pipeline::{SentimentAnalysisPipelineBuilder, SentimentModernBertSize};
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    // 1. Choose a model size (Base or Large)
+    let size = SentimentModernBertSize::Base;
+
+    // 2. Build the pipeline
+    let pipeline = SentimentAnalysisPipelineBuilder::new(size).build()?;
+
+    // 3. Analyze sentiment
+    let sentence = "I love using Rust for my projects!";
+    let sentiment = pipeline.predict(sentence)?;
+
+    println!("Text: {}", sentence);
+    println!("Predicted Sentiment: {}", sentiment); // Should predict positive sentiment
+    Ok(())
+}
+```
+
 ## Supported Models & Pipelines
 
 **Text Generation**:
@@ -86,6 +112,10 @@ fn main() -> anyhow::Result<()> {
 **Fill-Mask**:
 
 - ModernBERT: `Base`, `Large` (using `answerdotai/ModernBERT-base` or `-large`)
+
+**Sentiment Analysis**:
+
+- ModernBert Multilingual Sentiment Finetune: `Base`, `Large` (using `clapAI/modernBERT-base-multilingual-sentiment` or `-large`)
 
 ## Future Plans
 

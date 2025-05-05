@@ -6,7 +6,6 @@ use anyhow::{Error as E, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 pub struct ModernBertModel {
@@ -16,60 +15,38 @@ pub struct ModernBertModel {
 }
 
 impl ModernBertModel {
-    pub fn new(
-        size: ModernBertSize,
-        model_id: Option<String>,
-        revision: String,
-        tokenizer_file: Option<PathBuf>,
-        config_file: Option<PathBuf>,
-        weight_files: Option<PathBuf>,
-        cpu: bool,
-    ) -> Result<Self> {
-        let device = if cpu { Device::Cpu } else { load_device()? };
+    pub fn new(size: ModernBertSize) -> Result<Self> {
+        let device = load_device()?;
 
         let api = Api::new()?;
-        let model_id = model_id.unwrap_or_else(|| match size {
+        let model_id = match size {
             ModernBertSize::Base => "answerdotai/ModernBERT-base".to_string(),
             ModernBertSize::Large => "answerdotai/ModernBERT-large".to_string(),
-        });
+        };
 
-        println!("Using model: {}", model_id);
-        println!("Using revision: {}", revision);
-        println!("Using device: {:?}", device);
+        let repo = api.repo(Repo::new(model_id, RepoType::Model));
 
-        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let config_filename = repo.get("config.json")?;
 
-        let config_filename = match &config_file {
-            Some(file) => file.clone(),
-            None => {
-                println!("Fetching config...");
-                repo.get("config.json")?
+        let weights_filename = {
+            match repo.get("model.safetensors") {
+                Ok(safetensors) => safetensors,
+                Err(_) => match repo.get("pytorch_model.bin") {
+                    Ok(pytorch_model) => pytorch_model,
+                    Err(e) => {
+                        anyhow::bail!("Model weights not found in repo. Expected `model.safetensors` or `pytorch_model.bin`. Error: {e}")
+                    }
+                },
             }
         };
 
-        let weights_filename = match &weight_files {
-            Some(files) => files.clone(),
-            None => {
-                println!("Fetching model weights...");
-                match repo.get("model.safetensors") {
-                    Ok(safetensors) => safetensors,
-                    Err(_) => match repo.get("pytorch_model.bin") {
-                        Ok(pytorch_model) => pytorch_model,
-                        Err(e) => {
-                            anyhow::bail!("Model weights not found in repo. Expected `model.safetensors` or `pytorch_model.bin`. Error: {e}")
-                        }
-                    },
-                }
-            }
-        };
-
-        println!("Loading configuration...");
         let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
             E::msg(format!(
                 "Failed to read config file {:?}: {}",
                 config_filename, e
             ))
         })?;
+
         let config: modernbert::Config = serde_json::from_str(&config_content).map_err(|e| {
             E::msg(format!(
                 "Failed to parse config file {:?}: {}",
@@ -77,12 +54,10 @@ impl ModernBertModel {
             ))
         })?;
 
-        println!("Loading model weights...");
         let vb = if weights_filename
             .extension()
             .map_or(false, |ext| ext == "safetensors")
         {
-            println!("Loading weights from safetensors...");
             unsafe {
                 VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &device)?
             }
@@ -90,15 +65,12 @@ impl ModernBertModel {
             .extension()
             .map_or(false, |ext| ext == "bin")
         {
-            println!("Loading weights from pytorch_model.bin...");
             VarBuilder::from_pth(&weights_filename, DType::F32, &device)?
         } else {
             anyhow::bail!("Unsupported weight file format: {:?}", weights_filename);
         };
 
-        println!("Building model...");
         let model = ModernBertForMaskedLM::load(vb, &config)?;
-        println!("Model built successfully.");
 
         Ok(Self {
             model,

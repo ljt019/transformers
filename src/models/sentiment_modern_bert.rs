@@ -4,7 +4,7 @@ use anyhow::{Error as E, Result};
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 use tokenizers::Tokenizer;
 
 /// Available ModernBERT Sentiment model sizes.
@@ -21,16 +21,8 @@ pub struct SentimentModernBertModel {
 }
 
 impl SentimentModernBertModel {
-    pub fn new(
-        size: SentimentModernBertSize,
-        model_id_override: Option<String>,
-        revision: String,
-        tokenizer_file: Option<PathBuf>,
-        config_file: Option<PathBuf>,
-        weight_files: Option<PathBuf>,
-        cpu: bool,
-    ) -> Result<Self> {
-        let device = if cpu { Device::Cpu } else { load_device()? };
+    pub fn new(size: SentimentModernBertSize) -> Result<Self> {
+        let device = load_device()?;
 
         let default_model_id = match size {
             SentimentModernBertSize::Base => {
@@ -40,50 +32,31 @@ impl SentimentModernBertModel {
                 "clapAI/modernBERT-large-multilingual-sentiment".to_string()
             }
         };
-        let model_id = model_id_override.unwrap_or(default_model_id);
-
-        println!("Using sentiment model: {}", model_id);
-        println!("Using revision: {}", revision);
-        println!("Using device: {:?}", device);
+        let model_id = default_model_id;
 
         let api = Api::new()?;
-        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+        let repo = api.repo(Repo::new(model_id, RepoType::Model));
 
-        let config_filename = match config_file {
-            Some(file) => file,
-            None => {
-                println!("Fetching config...");
-                repo.get("config.json")?
+        let config_filename = repo.get("config.json")?;
+
+        let weights_filename = {
+            match repo.get("model.safetensors") {
+                Ok(safetensors) => safetensors,
+                Err(_) => match repo.get("pytorch_model.bin") {
+                    Ok(pytorch_model) => pytorch_model,
+                    Err(e) => {
+                        anyhow::bail!("Model weights not found in repo. Expected `model.safetensors` or `pytorch_model.bin`. Error: {e}")
+                    }
+                },
             }
         };
 
-        let weights_filename = match weight_files {
-            Some(files) => files,
-            None => {
-                println!("Fetching model weights...");
-                match repo.get("model.safetensors") {
-                    Ok(safetensors) => safetensors,
-                    Err(_) => match repo.get("pytorch_model.bin") {
-                        Ok(pytorch_model) => pytorch_model,
-                        Err(e) => {
-                            anyhow::bail!("Model weights not found in repo. Expected `model.safetensors` or `pytorch_model.bin`. Error: {e}")
-                        }
-                    },
-                }
-            }
-        };
-
-        println!("Loading configuration...");
         let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
             E::msg(format!(
                 "Failed to read config file {:?}: {}",
                 config_filename, e
             ))
         })?;
-        println!(
-            "--- Raw Config Content ---\n{}\n-------------------------",
-            config_content
-        );
 
         // Extract classification metadata (id2label) from the same JSON
         #[derive(serde::Deserialize)]
@@ -116,18 +89,7 @@ impl SentimentModernBertModel {
             label2id,
             classifier_pooling: pooling,
         });
-        println!(
-            "--- Deserialized Config Struct ---
-{:?}\n--------------------------------",
-            config
-        );
-        println!(
-            "--- Deserialized config.classifier_config ---
-{:?}\n--------------------------------",
-            config.classifier_config
-        );
 
-        println!("Loading model weights...");
         // Determine DType based on filename or config (assuming float16 for safetensors/bin if specified)
         // Defaulting to F32 for now, adjust if needed based on actual model weights
         // The config specifies torch_dtype: "float16", but candle needs explicit handling
@@ -137,21 +99,17 @@ impl SentimentModernBertModel {
             .extension()
             .map_or(false, |ext| ext == "safetensors")
         {
-            println!("Loading weights from safetensors ({:?})...", dtype);
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device)? }
         } else if weights_filename
             .extension()
             .map_or(false, |ext| ext == "bin")
         {
-            println!("Loading weights from pytorch_model.bin ({:?})...", dtype);
             VarBuilder::from_pth(&weights_filename, dtype, &device)?
         } else {
             anyhow::bail!("Unsupported weight file format: {:?}", weights_filename);
         };
 
-        println!("Building model...");
         let model = ModernBertForSequenceClassification::load(vb, &config)?;
-        println!("Sentiment model built successfully.");
 
         Ok(Self {
             model,
@@ -198,11 +156,7 @@ impl SentimentModernBertModel {
         Ok(predicted_label)
     }
 
-    pub fn get_tokenizer_repo_info(
-        size: SentimentModernBertSize,
-        model_id_override: Option<String>,
-        revision: String,
-    ) -> (String, String) {
+    pub fn get_tokenizer_repo_info(size: SentimentModernBertSize) -> String {
         let default_model_id = match size {
             SentimentModernBertSize::Base => {
                 "clapAI/modernBERT-base-multilingual-sentiment".to_string()
@@ -211,7 +165,7 @@ impl SentimentModernBertModel {
                 "clapAI/modernBERT-large-multilingual-sentiment".to_string()
             }
         };
-        let model_id = model_id_override.unwrap_or(default_model_id);
-        (model_id, revision)
+        let model_id = default_model_id;
+        model_id
     }
 }
