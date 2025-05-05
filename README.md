@@ -1,5 +1,10 @@
 # transformers v0.0.6
 
+<!-- CI / Workflow Badges -->
+[<img alt="crates.io" src="https://img.shields.io/crates/v/transformers.svg?style=for-the-badge&color=fc8d62&logo=rust" height="19">](https://crates.io/crates/transformers)
+[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-transformers-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="19">](https://docs.rs/transformers)
+![Build](https://github.com/ljt019/transformers/actions/workflows/build_and_release.yaml/badge.svg?branch=main)
+
 > This crate is under active development. APIs may change as features are still being added.
 >
 > **Supported Pipelines so far:**
