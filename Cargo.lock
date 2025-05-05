@@ -2554,9 +2554,8 @@ dependencies = [
  "candle-transformers",
  "hf-hub",
  "minijinja",
- "serde",
- "serde_json",
  "tokenizers",
+ "tracing",
 ]
 
 [[package]]
