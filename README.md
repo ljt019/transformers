@@ -1,4 +1,4 @@
-# transformers v0.0.3
+# transformers v0.0.4
 
 > This crate is under active development. APIs may change as features are still being added.
 >
