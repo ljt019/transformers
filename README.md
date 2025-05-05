@@ -1,11 +1,16 @@
-# transformers v0.0.3
+# transformers v0.0.4
 
 > This crate is under active development. APIs may change as features are still being added.
 >
-> **Supported Pipelines:**
+> **Supported Pipelines so far:**
 >
-> - Text Generation: Gemma3 (1B, 4B, 12B, 27B), Phi4 (14B)
-> - Fill-Mask: ModernBERT (Base, Large)
+> - Text Generation:
+>   - Qwen3 (0.6B, 1.7B, 4B, 8B, 14B, 32B) *moe not implemented yet*
+>   - Gemma3 (1B, 4B, 12B, 27B)
+>   - Phi4 (14B)
+>
+> - Fill-Mask:
+>   - ModernBERT (Base, Large)
 
 Transformers provides a simple, idiomatic Rust interface for running local large language models (LLMs) via the [Candle](https://github.com/huggingface/candle) framework. It offers an API inspired by Python's [transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
@@ -21,12 +26,12 @@ cargo add transformers
 
 ```rust
 use transformers::pipelines::text_generation_pipeline::{
-    TextGenerationPipelineBuilder, ModelOptions, Gemma3Size,
+    TextGenerationPipelineBuilder, ModelOptions, Qwen3Size,
 };
 
 fn main() {
     // 1. Choose a model family and size
-    let model_choice = ModelOptions::Gemma3(Gemma3Size::Size4B);
+    let model_choice = ModelOptions::Qwen3(Qwen3Size::Size0_6B);
 
     // 2. Build the pipeline with optional parameters
     let pipeline = TextGenerationPipelineBuilder::new(model_choice)
@@ -72,6 +77,7 @@ fn main() -> anyhow::Result<()> {
 
 - Gemma3: `1B`, `4B`, `12B`, `27B`
 - Phi4: `14B`
+- Qwen3: `0.6B`, `1.7B`, `4B`, `8B`, `14B`, `32B`
 
 **Fill-Mask**:
 
