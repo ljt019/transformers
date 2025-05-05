@@ -1,4 +1,4 @@
-use crate::models::raw::quantized_qwen3;
+use crate::models::raw::models::quantized_qwen3;
 
 use crate::utils::{self, load_qwen3_model_weights, ModelConfig, QuantizedModelWeights};
 

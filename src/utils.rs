@@ -1,10 +1,10 @@
-use super::models::raw::quantized_qwen3;
+use crate::generation::{LogitsProcessor, Sampling};
+use crate::models::raw::models::quantized_gemma3;
+use crate::models::raw::models::quantized_phi3;
+use crate::models::raw::models::quantized_qwen3;
 use crate::pipelines::text_generation_pipeline::LargeLanguageModel;
 use candle_core::quantized::gguf_file;
 use candle_core::{CudaDevice, Device, Tensor};
-use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::quantized_gemma3;
-use candle_transformers::models::quantized_phi3;
 use hf_hub;
 use std::cell::RefCell;
 use std::fs::File;
@@ -108,6 +108,24 @@ pub fn load_phi3_model_weights(
         .map_err(anyhow::Error::from)
 }
 
+/// Loads Qwen3 GGUF model weights (used for qwen3_quantized)
+pub fn load_qwen3_model_weights(
+    device: &Device,
+    hf_config: &HfConfig,
+) -> anyhow::Result<quantized_qwen3::ModelWeights> {
+    let model_path = {
+        let api = hf_hub::api::sync::Api::new()?;
+        let repo = hf_config.model_repo.clone();
+        let api = api.model(repo.to_string());
+        api.get(hf_config.model_filename.as_str())?
+    };
+
+    let mut file = File::open(&model_path)?;
+    let content = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
+    quantized_qwen3::ModelWeights::from_gguf(content, &mut file, device)
+        .map_err(anyhow::Error::from)
+}
+
 /// Loads a tokenizer from Hugging Face, downloading it if necessary.
 pub fn load_tokenizer(hf_config: &HfConfig) -> anyhow::Result<Tokenizer> {
     let tokenizer_path = {
@@ -207,11 +225,7 @@ pub fn generate_quantized_text<M: QuantizedModelWeights>(
         let logits = if params.repeat_penalty <= 1. || penalty_context.is_empty() {
             logits
         } else {
-            candle_transformers::utils::apply_repeat_penalty(
-                &logits,
-                params.repeat_penalty,
-                penalty_context,
-            )?
+            apply_repeat_penalty(&logits, params.repeat_penalty, penalty_context)?
         };
 
         next_token = logits_processor.sample(&logits)?;
@@ -282,4 +296,29 @@ impl ModelConfig {
             params,
         })
     }
+}
+
+pub fn apply_repeat_penalty(
+    logits: &Tensor,
+    penalty: f32,
+    context: &[u32],
+) -> candle_core::Result<Tensor> {
+    let device = logits.device();
+    let mut logits = logits.to_dtype(candle_core::DType::F32)?.to_vec1::<f32>()?;
+    let mut already_seen = std::collections::HashSet::new();
+    for token_id in context {
+        if already_seen.contains(token_id) {
+            continue;
+        }
+        already_seen.insert(token_id);
+        if let Some(logit) = logits.get_mut(*token_id as usize) {
+            if *logit >= 0. {
+                *logit /= penalty
+            } else {
+                *logit *= penalty
+            }
+        }
+    }
+    let logits_len = logits.len();
+    Tensor::from_vec(logits, logits_len, device)
 }

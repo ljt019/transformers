@@ -1,4 +1,4 @@
-use candle_transformers::models::quantized_gemma3;
+use crate::models::raw::models::quantized_gemma3;
 
 use crate::utils::{self, load_gemma3_model_weights, ModelConfig};
 

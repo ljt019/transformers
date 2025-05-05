@@ -22,6 +22,10 @@ cargo add transformers
 
 ## Usage
 
+At this point in development the only real way to interact with the models is through the given pipelines, I plan to eventually allow you to work with the models directly. 
+
+Some examples of how to use pipelines:
+
 ### Text Generation
 
 ```rust

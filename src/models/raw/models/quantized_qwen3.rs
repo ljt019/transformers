@@ -6,8 +6,8 @@
 //! References:
 //! - [Qwen3 Models](https://huggingface.co/Qwen/Qwen3-0.6B) (architecture based on official implementations)
 //!
-use super::quantized_nn::RmsNorm;
-use super::utils::repeat_kv;
+use super::super::quantized_nn::RmsNorm;
+use super::super::utils::repeat_kv;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
