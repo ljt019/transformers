@@ -1,7 +1,7 @@
 [package]
 name = "transformers"
-description = "A transformers like interface for interacting with local LLMs"
-version = "0.0.5"
+description = "A transformers like interface for interacting with local LLMs in Rust. This crate aims to provide the simplest interface to use to interact with local LLMs from Rust."
+version = "0.0.6"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ljt019/transformers/"
