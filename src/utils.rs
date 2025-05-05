@@ -1,3 +1,4 @@
+use super::models::raw::quantized_qwen3;
 use crate::pipelines::text_generation_pipeline::LargeLanguageModel;
 use candle_core::quantized::gguf_file;
 use candle_core::{CudaDevice, Device, Tensor};
