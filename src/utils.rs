@@ -1,4 +1,4 @@
-use crate::generation::{LogitsProcessor, Sampling};
+use crate::models::raw::generation::{LogitsProcessor, Sampling};
 use crate::models::raw::models::quantized_gemma3;
 use crate::models::raw::models::quantized_phi3;
 use crate::models::raw::models::quantized_qwen3;
