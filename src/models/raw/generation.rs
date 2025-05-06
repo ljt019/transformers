@@ -164,3 +164,60 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 }
+
+/// Initializes a LogitsProcessor based on sampling parameters.
+pub fn initialize_logits_processor(params: &GenerationParams, seed: u64) -> LogitsProcessor {
+    let sampling = if params.temperature <= 0. {
+        Sampling::ArgMax
+    } else {
+        Sampling::All {
+            temperature: params.temperature,
+        }
+    };
+    LogitsProcessor::from_sampling(seed, sampling)
+}
+
+pub fn apply_repeat_penalty(
+    logits: &Tensor,
+    penalty: f32,
+    context: &[u32],
+) -> candle_core::Result<Tensor> {
+    let device = logits.device();
+    let mut logits = logits.to_dtype(candle_core::DType::F32)?.to_vec1::<f32>()?;
+    let mut already_seen = std::collections::HashSet::new();
+    for token_id in context {
+        if already_seen.contains(token_id) {
+            continue;
+        }
+        already_seen.insert(token_id);
+        if let Some(logit) = logits.get_mut(*token_id as usize) {
+            if *logit >= 0. {
+                *logit /= penalty
+            } else {
+                *logit *= penalty
+            }
+        }
+    }
+    let logits_len = logits.len();
+    Tensor::from_vec(logits, logits_len, device)
+}
+
+/// Generation parameters for language models.
+#[derive(Debug, Clone)]
+pub struct GenerationParams {
+    pub temperature: f64,
+    pub repeat_penalty: f32,
+    pub repeat_last_n: usize,
+    pub seed: u64,
+}
+
+impl GenerationParams {
+    pub fn new(temperature: f64, repeat_penalty: f32, repeat_last_n: usize, seed: u64) -> Self {
+        Self {
+            temperature,
+            repeat_penalty,
+            repeat_last_n,
+            seed,
+        }
+    }
+}
