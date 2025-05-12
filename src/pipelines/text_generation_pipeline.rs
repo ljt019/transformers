@@ -3,34 +3,14 @@ use crate::models::phi_4::QuantizedPhi4Model;
 use crate::models::qwen_3::QuantizedQwen3Model;
 use crate::utils::configs::ModelConfig;
 
-use crate::utils::GenerationParams;
+pub use crate::models::gemma_3::Gemma3Size;
+pub use crate::models::phi_4::Phi4Size;
+pub use crate::models::qwen_3::Qwen3Size;
+
+use crate::models::raw::generation::GenerationParams;
 use tokenizers::Tokenizer;
 
 use super::TextGenerationModel;
-
-/// Available Gemma3 model sizes (e.g., 1B, 4B, 12B, 27B).
-pub enum Gemma3Size {
-    Size1B,
-    Size4B,
-    Size12B,
-    Size27B,
-}
-
-/// Available Phi4 model sizes (e.g., 14B).
-pub enum Phi4Size {
-    Size14B,
-}
-
-// Available Qwen3 model sizes (e.g., 0.6B, 1.7B, 4B, 8B, 14B, 32B)
-// None of the moe models are supported yet.
-pub enum Qwen3Size {
-    Size0_6B,
-    Size1_7B,
-    Size4B,
-    Size8B,
-    Size14B,
-    Size32B,
-}
 
 /// High-level selection of model family/architecture.
 ///
@@ -44,8 +24,8 @@ pub enum Qwen3Size {
 /// ```
 pub enum ModelOptions {
     Gemma3(Gemma3Size),
-    Phi4(Phi4Size),
     Qwen3(Qwen3Size),
+    Phi4(Phi4Size),
 }
 
 impl ModelOptions {
@@ -54,12 +34,11 @@ impl ModelOptions {
         self,
         params: GenerationParams,
     ) -> anyhow::Result<Box<dyn TextGenerationModel>> {
-        let hf = self.hf_config();
-        let cfg = ModelConfig::new(params, hf.clone())?;
+        let cfg = ModelConfig::new(params)?;
         let model: Box<dyn TextGenerationModel> = match self {
-            ModelOptions::Gemma3(_) => Box::new(QuantizedGemma3Model::new(cfg)?),
-            ModelOptions::Phi4(_) => Box::new(QuantizedPhi4Model::new(cfg)?),
-            ModelOptions::Qwen3(_) => Box::new(QuantizedQwen3Model::new(cfg)?),
+            ModelOptions::Gemma3(size) => Box::new(QuantizedGemma3Model::new(cfg, size)?),
+            ModelOptions::Qwen3(size) => Box::new(QuantizedQwen3Model::new(cfg, size)?),
+            ModelOptions::Phi4(size) => Box::new(QuantizedPhi4Model::new(cfg, size)?),
         };
         Ok(model)
     }
@@ -122,12 +101,29 @@ impl TextGenerationPipelineBuilder {
         let generation_params =
             GenerationParams::new(temperature, repeat_penalty, repeat_last_n, seed);
 
-        // Build the HfConfig and model in one go via the nested enum helper
-        let (hf_config, model) = self.model_choice.build_model(generation_params)?;
+        let model = self.model_choice.build_model(generation_params)?;
+        let tokenizer = model.load_tokenizer()?;
 
-        let tokenizer = h?;
+        // Get EOS token ID
+        let eos_token_str = model.get_eos_token_str();
+        let eos_token_encoding = tokenizer.encode(eos_token_str, false).map_err(|e| {
+            anyhow::anyhow!("Failed to encode EOS token '{}': {}", eos_token_str, e)
+        })?;
+        let eos_ids = eos_token_encoding.get_ids();
+        if eos_ids.len() != 1 {
+            anyhow::bail!(
+                "EOS token string '{}' did not tokenize to a single ID. Got: {:?}",
+                eos_token_str,
+                eos_ids
+            );
+        }
+        let eos_token_id = eos_ids[0];
 
-        Ok(TextGenerationPipeline { model, tokenizer })
+        Ok(TextGenerationPipeline {
+            model,
+            tokenizer,
+            eos_token_id,
+        })
     }
 }
 
@@ -154,10 +150,26 @@ pub struct TextGenerationPipeline {
     /// Tokenizer corresponding to the model's vocabulary.
     model: Box<dyn TextGenerationModel>,
     tokenizer: Tokenizer,
+    eos_token_id: u32,
 }
 
 impl TextGenerationPipeline {
     pub fn generate_text(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
-        self.model.prompt_model(&self.tokenizer, prompt, max_length)
+        // Format the prompt
+        let formatted_prompt = self.model.format_prompt(prompt);
+
+        // Turn the prompt into tokens
+        let prompt_tokens = self.tokenizer.encode(formatted_prompt, true).unwrap();
+
+        // Generate the response with the prompt tokens
+        let response_as_tokens = self
+            .model
+            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
+            .unwrap();
+
+        // Turn the response tokens back into a string
+        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+
+        Ok(response)
     }
 }

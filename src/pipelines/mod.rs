@@ -3,14 +3,19 @@ pub mod sentiment_analysis_pipeline;
 pub mod text_generation_pipeline;
 pub mod zero_shot_classification_pipeline;
 
-use crate::utils::loaders::LoadedGgufModelWeights;
-
 pub trait TextGenerationModel {
     fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
 
-    fn load_model_weights(&self) -> anyhow::Result<LoadedGgufModelWeights>;
+    fn get_eos_token_str(&self) -> &str;
 
-    fn prompt(&self, prompt: &str, max_length: usize) -> anyhow::Result<String>;
+    fn format_prompt(&self, prompt: &str) -> String;
+
+    fn prompt_with_tokens(
+        &self,
+        tokens: &[u32],
+        max_length: usize,
+        eos_token: u32,
+    ) -> anyhow::Result<Vec<u32>>;
 }
 
 pub trait FillMaskModel {

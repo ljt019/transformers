@@ -2,10 +2,6 @@ use hf_hub::api::sync::Api as HfApi;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
-use crate::models::raw::models::quantized_gemma3;
-use crate::models::raw::models::quantized_phi3;
-use crate::models::raw::models::quantized_qwen3;
-
 #[derive(Debug, Clone)]
 pub struct HfLoader {
     pub repo: String,
@@ -59,29 +55,20 @@ impl TokenizerLoader {
 }
 
 #[derive(Clone)]
-pub enum LoadedGgufModelWeights {
-    Phi3(quantized_phi3::ModelWeights),
-    Qwen3(quantized_qwen3::ModelWeights),
-    Gemma3(quantized_gemma3::ModelWeights),
-}
-
-#[derive(Clone)]
 pub struct GgufModelLoader {
-    pub device: candle_core::Device,
     pub model_file_loader: HfLoader,
 }
 
 impl GgufModelLoader {
-    pub fn new(device: candle_core::Device, model_repo: &str, model_filename: &str) -> Self {
+    pub fn new(model_repo: &str, model_filename: &str) -> Self {
         let model_file_loader = HfLoader::new(model_repo, model_filename);
 
-        Self {
-            device,
-            model_file_loader,
-        }
+        Self { model_file_loader }
     }
 
-    pub fn load(&self) -> anyhow::Result<candle_core::quantized::gguf_file::Content> {
+    pub fn load(
+        &self,
+    ) -> anyhow::Result<(std::fs::File, candle_core::quantized::gguf_file::Content)> {
         let model_file_path = self.model_file_loader.load()?;
 
         let mut file = std::fs::File::open(&model_file_path)?;

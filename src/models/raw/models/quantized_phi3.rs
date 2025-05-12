@@ -313,8 +313,12 @@ impl ModelWeights {
             Ok(mask)
         }
     }
+}
 
-    pub fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+use super::super::super::ModelWeightForward;
+
+impl ModelWeightForward for ModelWeights {
+    fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {
             None

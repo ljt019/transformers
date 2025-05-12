@@ -1,72 +1,87 @@
 use crate::models::raw::models::quantized_phi3;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, LoadedGgufModelWeights, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
 use std::cell::RefCell;
 
 use crate::pipelines::TextGenerationModel;
 
+use crate::models::generate_tokens_from_prompt;
+
+#[derive(Clone)]
 pub enum Phi4Size {
     Size14B,
 }
 
-// Use the generic QuantizedModel with Phi3 weights (for Phi-4) specific types and configuration
-pub type QuantizedPhi4Model = crate::utils::QuantizedModel<quantized_phi3::ModelWeights>;
+pub struct QuantizedPhi4Model {
+    weights: RefCell<quantized_phi3::ModelWeights>,
+    config: ModelConfig,
+}
 
 impl QuantizedPhi4Model {
-    pub fn new(config: ModelConfig) -> anyhow::Result<Self> {
-        // Load weights and tokenizer using the new loader
-        let loaded_weights = config.model_loader.load_weights()?;
-
-        // Extract the Phi3 weights from the enum
-        let phi3_weights = match loaded_weights {
-            LoadedGgufModelWeights::Phi3(weights) => Ok(weights),
-            _ => Err(anyhow::anyhow!(
-                "Loaded unexpected model type for Phi4, expected Phi3 weights"
-            )),
-        }?;
-
-        // Wrap the weights in RefCell
-        let weights = RefCell::new(phi3_weights);
-
-        // Define the prompt formatter for Phi (identity function)
-        let format_prompt = |prompt: &str| -> String { prompt.to_string() };
+    pub fn new(config: ModelConfig, size: Phi4Size) -> anyhow::Result<Self> {
+        let specific_weights =
+            QuantizedPhi4Model::load_model_weights(config.device.clone(), size.clone())?;
+        let weights_refcell = RefCell::new(specific_weights);
 
         Ok(Self {
-            name: "Phi4",
-            weights,
-            format_prompt,
-            eos_token: "<|endoftext|>", // EOS token for Phi
+            weights: weights_refcell,
             config,
         })
+    }
+
+    pub fn load_model_weights(
+        device: candle_core::Device,
+        size: Phi4Size,
+    ) -> anyhow::Result<quantized_phi3::ModelWeights> {
+        let (repo, file_name) = match size {
+            Phi4Size::Size14B => ("microsoft/phi-4-gguf", "phi-4-q4.gguf"),
+        };
+
+        let gguf_loader = GgufModelLoader::new(repo, file_name);
+
+        let (mut gguf_file, gguf_content) = gguf_loader.load()?;
+
+        let phi3_model_weights =
+            quantized_phi3::ModelWeights::from_gguf(false, gguf_content, &mut gguf_file, &device)?;
+
+        Ok(phi3_model_weights)
     }
 }
 
 impl TextGenerationModel for QuantizedPhi4Model {
     fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("microsoft/phi-4", "tokenizer.json");
 
-        let tokenizer = tokenizer_loader.load_tokenizer()?;
+        let tokenizer = tokenizer_loader.load()?;
 
         Ok(tokenizer)
     }
 
-    fn load_model_weights(&self, _size: Phi4Size) -> anyhow::Result<LoadedGgufModelWeights> {
-        let (repo, file_name) = ("microsoft/phi-4-gguf", "phi-4-q4.gguf");
-
-        let gguf_loader = GgufModelLoader::new(self.config.device, repo, file_name);
-
-        let (gguf_file, gguf_content) = gguf_loader.load()?;
-
-        let weights = quantized_phi3::ModelWeights::from_gguf(
-            gguf_content,
-            &mut gguf_file,
-            &self.config.device,
-        )?;
-
-        Ok(weights)
+    fn get_eos_token_str(&self) -> &str {
+        "<|im_end|>"
     }
 
-    fn prompt(&self, prompt: &str, max_len: usize) -> anyhow::Result<String> {
-        todo!()
+    fn format_prompt(&self, prompt: &str) -> String {
+        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
+    }
+
+    fn prompt_with_tokens(
+        &self,
+        prompt_tokens: &[u32],
+        max_len: usize,
+        eos_token: u32,
+    ) -> anyhow::Result<Vec<u32>> {
+        let mut specific_weights_ref_mut = self.weights.borrow_mut();
+
+        let response_tokens = generate_tokens_from_prompt(
+            prompt_tokens,
+            &self.config.params,
+            &mut *specific_weights_ref_mut,
+            max_len,
+            &self.config.device,
+            eos_token,
+        )?;
+
+        Ok(response_tokens)
     }
 }

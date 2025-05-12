@@ -501,8 +501,12 @@ impl ModelWeights {
             .collect();
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
+}
 
-    pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+use super::super::super::ModelWeightForward;
+
+impl ModelWeightForward for ModelWeights {
+    fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;

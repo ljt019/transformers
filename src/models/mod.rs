@@ -10,9 +10,9 @@ pub mod qwen_3;
 
 pub use raw::generation::{apply_repeat_penalty, initialize_logits_processor};
 
-trait ModelWeights {
+trait ModelWeightForward {
     fn forward(
-        &self,
+        &mut self,
         xs: &candle_core::Tensor,
         start_pos: usize,
     ) -> candle_core::Result<candle_core::Tensor>;
@@ -20,7 +20,7 @@ trait ModelWeights {
 
 use candle_core::{Device, Tensor};
 
-fn generate_tokens_from_prompt<M: ModelWeights>(
+fn generate_tokens_from_prompt<M: ModelWeightForward>(
     prompt_tokens: &[u32],
     params: &raw::generation::GenerationParams,
     model_weights: &mut M,

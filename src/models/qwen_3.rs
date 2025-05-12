@@ -1,10 +1,13 @@
 use crate::models::raw::models::quantized_qwen3;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, LoadedGgufModelWeights, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
 use std::cell::RefCell;
 
 use crate::pipelines::TextGenerationModel;
 
+use crate::models::generate_tokens_from_prompt;
+
+#[derive(Clone)]
 pub enum Qwen3Size {
     Size0_6B,
     Size1_7B,
@@ -14,37 +17,44 @@ pub enum Qwen3Size {
     Size32B,
 }
 
-// Use the generic QuantizedModel with Qwen3 specific types and configuration
-pub type QuantizedQwen3Model = crate::utils::QuantizedModel<quantized_qwen3::ModelWeights>;
+pub struct QuantizedQwen3Model {
+    weights: RefCell<quantized_qwen3::ModelWeights>,
+    config: ModelConfig,
+}
 
 impl QuantizedQwen3Model {
-    pub fn new(config: ModelConfig) -> anyhow::Result<Self> {
-        // Load weights using the new loader
-        let loaded_weights = config.model_loader.load_weights()?;
-
-        // Extract the Qwen3 weights from the enum
-        let qwen3_weights = match loaded_weights {
-            LoadedGgufModelWeights::Qwen3(weights) => Ok(weights),
-            _ => Err(anyhow::anyhow!(
-                "Loaded unexpected model type for Qwen3, expected Qwen3 weights"
-            )),
-        }?;
-
-        // Wrap the weights in RefCell
-        let weights = RefCell::new(qwen3_weights);
-
-        // Define the prompt formatter for Qwen3
-        let format_prompt = |prompt: &str| -> String {
-            format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
-        };
+    pub fn new(config: ModelConfig, size: Qwen3Size) -> anyhow::Result<Self> {
+        let specific_weights =
+            QuantizedQwen3Model::load_model_weights(config.device.clone(), size.clone())?;
+        let weights_refcell = RefCell::new(specific_weights);
 
         Ok(Self {
-            name: "Qwen3",
-            weights,
-            format_prompt,
-            eos_token: "<|endoftext|>",
+            weights: weights_refcell,
             config,
         })
+    }
+
+    pub fn load_model_weights(
+        device: candle_core::Device,
+        size: Qwen3Size,
+    ) -> anyhow::Result<quantized_qwen3::ModelWeights> {
+        let (repo, file_name) = match size {
+            Qwen3Size::Size0_6B => ("unsloth/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q4_K_M.gguf"),
+            Qwen3Size::Size1_7B => ("unsloth/Qwen3-1.7B-GGUF", "Qwen3-1.7B-Q4_K_M.gguf"),
+            Qwen3Size::Size4B => ("unsloth/Qwen3-4B-GGUF", "Qwen3-4B-Q4_K_M.gguf"),
+            Qwen3Size::Size8B => ("unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf"),
+            Qwen3Size::Size14B => ("unsloth/Qwen3-14B-GGUF", "Qwen3-14B-Q4_K_M.gguf"),
+            Qwen3Size::Size32B => ("unsloth/Qwen3-32B-GGUF", "Qwen3-32B-Q4_K_M.gguf"),
+        };
+
+        let gguf_loader = GgufModelLoader::new(repo, file_name);
+
+        let (mut gguf_file, gguf_content) = gguf_loader.load()?;
+
+        let qwen3_model_weights =
+            quantized_qwen3::ModelWeights::from_gguf(gguf_content, &mut gguf_file, &device)?;
+
+        Ok(qwen3_model_weights)
     }
 }
 
@@ -53,22 +63,36 @@ impl TextGenerationModel for QuantizedQwen3Model {
         // The tokenizer is the same for all sizes, so we can just use the 0.6B model
         let tokenizer_loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
 
-        let tokenizer = tokenizer_loader.load_tokenizer()?;
+        let tokenizer = tokenizer_loader.load()?;
 
         Ok(tokenizer)
     }
 
-    fn load_model_weights(&self, size: Qwen3Size) -> anyhow::Result<LoadedGgufModelWeights> {
-        let (repo, file_name) = match size {
-            Qwen3Size::Size0_6B => ("unsloth/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q4_K_M.gguf"),
-            Qwen3Size::Size1_7B => ("unsloth/Qwen3-1.7B-GGUF", "Qwen3-1.7B-Q4_K_M.gguf"),
-            Qwen3Size::Size4B => ("unsloth/Qwen3-4B-GGUF", "Qwen3-4B-Q4_K_M.gguf"),
-            Qwen3Size::Size8B => ("unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf"),
-            Qwen3Size::Size14B => ("unsloth/Qwen3-14B-GGUF", "Qwen3-14B-Q4_K_M.gguf"),
-        };
+    fn get_eos_token_str(&self) -> &str {
+        "<|im_end|>"
     }
 
-    fn prompt(&self, prompt: &str, max_len: usize) -> anyhow::Result<String> {
-        todo!()
+    fn format_prompt(&self, prompt: &str) -> String {
+        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
+    }
+
+    fn prompt_with_tokens(
+        &self,
+        prompt_tokens: &[u32],
+        max_len: usize,
+        eos_token: u32,
+    ) -> anyhow::Result<Vec<u32>> {
+        let mut specific_weights_ref_mut = self.weights.borrow_mut();
+
+        let response_tokens = generate_tokens_from_prompt(
+            prompt_tokens,
+            &self.config.params,
+            &mut *specific_weights_ref_mut,
+            max_len,
+            &self.config.device,
+            eos_token,
+        )?;
+
+        Ok(response_tokens)
     }
 }
