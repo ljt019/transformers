@@ -12,6 +12,8 @@ use tokenizers::Tokenizer;
 
 use super::TextGenerationModel;
 
+use crate::Messages;
+
 /// High-level selection of model family/architecture.
 ///
 /// You must also specify the size of the model you want to use.
@@ -160,6 +162,25 @@ impl TextGenerationPipeline {
 
         // Turn the prompt into tokens
         let prompt_tokens = self.tokenizer.encode(formatted_prompt, true).unwrap();
+
+        // Generate the response with the prompt tokens
+        let response_as_tokens = self
+            .model
+            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
+            .unwrap();
+
+        // Turn the response tokens back into a string
+        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+
+        Ok(response)
+    }
+
+    pub fn generate_chat(&self, messages: Messages, max_length: usize) -> anyhow::Result<String> {
+        // Format the messages
+        let formatted_messages = self.model.format_messages(messages);
+
+        // Turn the prompt into tokens
+        let prompt_tokens = self.tokenizer.encode(formatted_messages, true).unwrap();
 
         // Generate the response with the prompt tokens
         let response_as_tokens = self

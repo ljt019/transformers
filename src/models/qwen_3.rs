@@ -1,11 +1,13 @@
 use crate::models::raw::models::quantized_qwen3;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
+use minijinja::{context, Environment};
+use serde_json::Value;
 use std::cell::RefCell;
 
-use crate::pipelines::TextGenerationModel;
-
 use crate::models::generate_tokens_from_prompt;
+use crate::pipelines::TextGenerationModel;
+use crate::Messages;
 
 #[derive(Clone)]
 pub enum Qwen3Size {
@@ -74,6 +76,90 @@ impl TextGenerationModel for QuantizedQwen3Model {
 
     fn format_prompt(&self, prompt: &str) -> String {
         format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
+    }
+
+    fn format_messages(&self, messages: Messages) -> String {
+        // Create a loader for the tokenizer config
+        let tokenizer_config_loader = HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
+
+        // Loads the tokenizer_config.json file and returns the path to the json file as a PathBuf
+        let tokenizer_config_path = tokenizer_config_loader.load().unwrap();
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path).unwrap();
+
+        // Parse JSON and get the 'chat_template'
+        let config_json: Value = serde_json::from_str(&tokenizer_config_content).unwrap();
+        let mut chat_template_str = config_json["chat_template"].as_str().unwrap().to_string();
+
+        // Perform targeted template fixes:
+        // 1) Reverse list usage
+        chat_template_str = chat_template_str.replace("messages[::-1]", "messages|reverse");
+        // 2) Convert Python method calls to Jinja functions/tests
+        chat_template_str = chat_template_str.replace(
+            ".startswith('<tool_response>')",
+            " is startingwith \"<tool_response>\"",
+        );
+        chat_template_str = chat_template_str.replace(
+            ".endswith('</tool_response>')",
+            " is endingwith \"</tool_response>\"",
+        );
+        // 3) Replace split and method chaining with function pipeline
+        chat_template_str = chat_template_str.replace(
+            "message.content.split('</think>')[-1].lstrip('\n')",
+            "lstrip(last(split(message.content, \"</think>\")), \"\\n\")",
+        );
+        chat_template_str = chat_template_str.replace(
+            "message.content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n')",
+            "lstrip(last(split(rstrip(first(split(message.content, \"</think>\")), \"\\n\"), \"<think>\")), \"\\n\")"
+        );
+
+        // Create a minijinja environment
+        let mut env = Environment::new();
+        // Register filters and tests for string operations
+        env.add_test("startingwith", |value: &str, prefix: &str| {
+            value.starts_with(prefix)
+        });
+        env.add_test("endingwith", |value: &str, suffix: &str| {
+            value.ends_with(suffix)
+        });
+        env.add_function("split", |v: String, sep: String| -> Vec<String> {
+            v.split(&sep).map(String::from).collect()
+        });
+        env.add_function("first", |v: Vec<String>| -> String {
+            v.first().cloned().unwrap_or_default()
+        });
+        env.add_function("last", |v: Vec<String>| -> String {
+            v.last().cloned().unwrap_or_default()
+        });
+        env.add_function("lstrip", |s: String, pat: String| -> String {
+            let c = pat.chars().next().unwrap_or('\0'); // Get first char or null
+            s.trim_start_matches(c).to_string()
+        });
+        env.add_function("rstrip", |s: String, pat: String| -> String {
+            let c = pat.chars().next().unwrap_or('\0');
+            s.trim_end_matches(c).to_string()
+        });
+        env.add_function("strip", |s: String, pat: String| -> String {
+            let c = pat.chars().next().unwrap_or('\0');
+            s.trim_matches(c).to_string()
+        });
+
+        // Add the patched template
+        env.add_template("chat", &chat_template_str).unwrap();
+
+        // Get the template
+        let tmpl = env.get_template("chat").unwrap();
+
+        // Render the template
+        let rendered = tmpl
+            .render(context! {
+                messages => messages,
+                add_generation_prompt => true,
+            })
+            .unwrap();
+
+        println!("{}", rendered);
+
+        rendered
     }
 
     fn prompt_with_tokens(

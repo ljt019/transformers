@@ -1,10 +1,14 @@
 use crate::models::raw::models::quantized_gemma3;
 use crate::pipelines::TextGenerationModel;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
+use minijinja::{context, Environment};
+use serde::Serialize;
+use serde_json::Value;
 use std::cell::RefCell;
 
 use super::generate_tokens_from_prompt;
+use crate::Messages;
 
 #[derive(Clone)]
 pub enum Gemma3Size {
@@ -66,6 +70,37 @@ impl TextGenerationModel for QuantizedGemma3Model {
 
     fn get_eos_token_str(&self) -> &str {
         "<end_of_turn>"
+    }
+
+    fn format_messages(&self, messages: Messages) -> String {
+        // Create a loader for the tokenizer config (using the 1B model's repo)
+        let tokenizer_config_loader =
+            HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
+
+        // Loads the tokenizer_config.json file
+        let tokenizer_config_path = tokenizer_config_loader.load().unwrap();
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path).unwrap();
+
+        // Parse JSON and get the 'chat_template'
+        let config_json: Value = serde_json::from_str(&tokenizer_config_content).unwrap();
+        let chat_template = config_json["chat_template"].as_str().unwrap();
+
+        // Create a minijinja environment
+        let mut env = Environment::new();
+        env.add_template("chat", chat_template).unwrap();
+
+        // Get the template
+        let tmpl = env.get_template("chat").unwrap();
+
+        // Render the template
+        let rendered = tmpl
+            .render(context! {
+                messages => messages,
+                add_generation_prompt => true, // Common practice, adjust if needed
+            })
+            .unwrap();
+
+        rendered
     }
 
     fn format_prompt(&self, prompt: &str) -> String {

@@ -3,12 +3,16 @@ pub mod sentiment_analysis_pipeline;
 pub mod text_generation_pipeline;
 pub mod zero_shot_classification_pipeline;
 
+use crate::Messages;
+
 pub trait TextGenerationModel {
     fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
 
     fn get_eos_token_str(&self) -> &str;
 
     fn format_prompt(&self, prompt: &str) -> String;
+
+    fn format_messages(&self, messages: Messages) -> String;
 
     fn prompt_with_tokens(
         &self,
