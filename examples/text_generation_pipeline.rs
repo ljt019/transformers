@@ -17,7 +17,7 @@ fn main() -> Result<()> {
     println!("Generating text for prompt: '{}'", prompt);
 
     // 3. Generate text
-    let generated_text = pipeline.generate_text(prompt, max_length)?;
+    let generated_text = pipeline.prompt_completion(prompt, max_length)?;
 
     println!("\n--- Generated Text ---");
     println!("{}", generated_text);
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
 
     let second_prompt = "Explain the fibonacci sequence in simple terms. /no_think";
 
-    let generated_text = pipeline.generate_text(second_prompt, max_length)?;
+    let generated_text = pipeline.prompt_completion(second_prompt, max_length)?;
 
     println!("\n--- Generated Text 2 ---");
     println!("{}", generated_text);

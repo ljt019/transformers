@@ -12,7 +12,7 @@ use tokenizers::Tokenizer;
 
 use super::TextGenerationModel;
 
-use crate::Messages;
+use crate::Message;
 
 /// High-level selection of model family/architecture.
 ///
@@ -156,7 +156,7 @@ pub struct TextGenerationPipeline {
 }
 
 impl TextGenerationPipeline {
-    pub fn generate_text(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
+    pub fn prompt_completion(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
         // Format the prompt
         let formatted_prompt = self.model.format_prompt(prompt);
 
@@ -175,7 +175,11 @@ impl TextGenerationPipeline {
         Ok(response)
     }
 
-    pub fn generate_chat(&self, messages: Messages, max_length: usize) -> anyhow::Result<String> {
+    pub fn message_completion(
+        &self,
+        messages: Vec<Message>,
+        max_length: usize,
+    ) -> anyhow::Result<String> {
         // Format the messages
         let formatted_messages = self.model.format_messages(messages);
 

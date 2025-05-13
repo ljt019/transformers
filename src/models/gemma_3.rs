@@ -3,12 +3,11 @@ use crate::pipelines::TextGenerationModel;
 use crate::utils::configs::ModelConfig;
 use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
 use minijinja::{context, Environment};
-use serde::Serialize;
 use serde_json::Value;
 use std::cell::RefCell;
 
 use super::generate_tokens_from_prompt;
-use crate::Messages;
+use crate::Message;
 
 #[derive(Clone)]
 pub enum Gemma3Size {
@@ -35,7 +34,6 @@ impl QuantizedGemma3Model {
         })
     }
 
-    // This is an inherent method, not part of TextGenerationModel trait
     pub fn load_model_weights(
         device: candle_core::Device,
         size: Gemma3Size,
@@ -72,7 +70,7 @@ impl TextGenerationModel for QuantizedGemma3Model {
         "<end_of_turn>"
     }
 
-    fn format_messages(&self, messages: Messages) -> String {
+    fn format_messages(&self, messages: Vec<Message>) -> String {
         // Create a loader for the tokenizer config (using the 1B model's repo)
         let tokenizer_config_loader =
             HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
@@ -89,7 +87,6 @@ impl TextGenerationModel for QuantizedGemma3Model {
         let mut env = Environment::new();
         env.add_template("chat", chat_template).unwrap();
 
-        // Get the template
         let tmpl = env.get_template("chat").unwrap();
 
         // Render the template

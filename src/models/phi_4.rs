@@ -2,13 +2,12 @@ use crate::models::raw::models::quantized_phi3;
 use crate::utils::configs::ModelConfig;
 use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
 use minijinja::{context, Environment};
-use serde::Serialize;
 use serde_json::Value;
 use std::cell::RefCell;
 
 use crate::models::generate_tokens_from_prompt;
 use crate::pipelines::TextGenerationModel;
-use crate::Messages; // Assuming Messages type is accessible here
+use crate::Message;
 
 #[derive(Clone)]
 pub enum Phi4Size {
@@ -68,7 +67,7 @@ impl TextGenerationModel for QuantizedPhi4Model {
         format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
     }
 
-    fn format_messages(&self, messages: Messages) -> String {
+    fn format_messages(&self, messages: Vec<Message>) -> String {
         // Create a loader for the tokenizer config
         let tokenizer_config_loader = HfLoader::new("microsoft/phi-4", "tokenizer_config.json");
 
@@ -84,7 +83,6 @@ impl TextGenerationModel for QuantizedPhi4Model {
         let mut env = Environment::new();
         env.add_template("chat", chat_template).unwrap();
 
-        // Get the template
         let tmpl = env.get_template("chat").unwrap();
 
         // Render the template

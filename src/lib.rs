@@ -8,9 +8,6 @@ pub(crate) const DEFAULT_REPEAT_PENALTY: f32 = 1.1;
 pub(crate) const DEFAULT_REPEAT_LAST_N: usize = 64;
 pub(crate) const DEFAULT_SEED: u64 = 299792458;
 
-/// A collection of messages in a chat.
-pub type Messages = Vec<Message>;
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// An individual message in a chat.
 pub struct Message {
@@ -48,5 +45,15 @@ impl Message {
             role: "assistant".to_string(),
             content: content.to_string(),
         }
+    }
+
+    /// Get the role of the message.
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
+    /// Get the content of the message.
+    pub fn content(&self) -> &str {
+        &self.content
     }
 }

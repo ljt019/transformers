@@ -7,8 +7,7 @@ use std::cell::RefCell;
 
 use crate::models::generate_tokens_from_prompt;
 use crate::pipelines::TextGenerationModel;
-use crate::Messages;
-
+use crate::Message;
 #[derive(Clone)]
 pub enum Qwen3Size {
     Size0_6B,
@@ -78,7 +77,7 @@ impl TextGenerationModel for QuantizedQwen3Model {
         format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
     }
 
-    fn format_messages(&self, messages: Messages) -> String {
+    fn format_messages(&self, messages: Vec<Message>) -> String {
         // Create a loader for the tokenizer config
         let tokenizer_config_loader = HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
@@ -114,7 +113,10 @@ impl TextGenerationModel for QuantizedQwen3Model {
 
         // Create a minijinja environment
         let mut env = Environment::new();
+
         // Register filters and tests for string operations
+        // Qwen3 is the only model i've had to do this with so for, it's weird
+        // It's jinja template just has weird pythonic stuff in it
         env.add_test("startingwith", |value: &str, prefix: &str| {
             value.starts_with(prefix)
         });
