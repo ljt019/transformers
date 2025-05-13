@@ -1,7 +1,7 @@
 use crate::models::sentiment_modern_bert::SentimentModernBertModel;
 // Re-export the size enum for users of the pipeline
 pub use crate::models::sentiment_modern_bert::SentimentModernBertSize;
-use crate::utils::{load_tokenizer, HfConfig};
+use crate::utils::loaders::TokenizerLoader;
 use anyhow::Result;
 use tokenizers::{PaddingParams, Tokenizer};
 
@@ -31,15 +31,13 @@ impl SentimentAnalysisPipelineBuilder {
         let tokenizer_model_id = SentimentModernBertModel::get_tokenizer_repo_info(self.size);
 
         // Create HfConfig for the tokenizer
-        let tokenizer_config = HfConfig::new(
+        let tokenizer_loader = TokenizerLoader::new(
             &tokenizer_model_id, // model repo id (borrowed)
             "tokenizer.json",    // tokenizer filename on hub
-            "",                  // gguf repo (not needed for tokenizer)
-            "",                  // gguf filename (not needed for tokenizer)
         );
 
         // Load tokenizer using HfConfig
-        let mut tokenizer = load_tokenizer(&tokenizer_config)?;
+        let mut tokenizer = tokenizer_loader.load()?;
 
         // Configure padding (get pad_token_id from tokenizer config or a default)
         // Assuming the tokenizer for sentiment model has standard BERT padding tokens

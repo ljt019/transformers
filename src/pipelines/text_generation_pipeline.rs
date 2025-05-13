@@ -1,34 +1,18 @@
 use crate::models::gemma_3::QuantizedGemma3Model;
 use crate::models::phi_4::QuantizedPhi4Model;
 use crate::models::qwen_3::QuantizedQwen3Model;
-use crate::utils::ModelConfig;
+use crate::utils::configs::ModelConfig;
 
-use crate::utils::{GenerationParams, HfConfig};
+pub use crate::models::gemma_3::Gemma3Size;
+pub use crate::models::phi_4::Phi4Size;
+pub use crate::models::qwen_3::Qwen3Size;
+
+use crate::models::raw::generation::GenerationParams;
 use tokenizers::Tokenizer;
 
-/// Available Gemma3 model sizes (e.g., 1B, 4B, 12B, 27B).
-pub enum Gemma3Size {
-    Size1B,
-    Size4B,
-    Size12B,
-    Size27B,
-}
+use super::TextGenerationModel;
 
-/// Available Phi4 model sizes (e.g., 14B).
-pub enum Phi4Size {
-    Size14B,
-}
-
-// Available Qwen3 model sizes (e.g., 0.6B, 1.7B, 4B, 8B, 14B, 32B)
-// None of the moe models are supported yet.
-pub enum Qwen3Size {
-    Size0_6B,
-    Size1_7B,
-    Size4B,
-    Size8B,
-    Size14B,
-    Size32B,
-}
+use crate::Message;
 
 /// High-level selection of model family/architecture.
 ///
@@ -42,102 +26,23 @@ pub enum Qwen3Size {
 /// ```
 pub enum ModelOptions {
     Gemma3(Gemma3Size),
-    Phi4(Phi4Size),
     Qwen3(Qwen3Size),
+    Phi4(Phi4Size),
 }
 
 impl ModelOptions {
-    /// Map each ModelOptions variant to its HfConfig
-    pub fn hf_config(&self) -> HfConfig {
-        match self {
-            ModelOptions::Gemma3(size) => match size {
-                Gemma3Size::Size1B => HfConfig::new(
-                    "google/gemma-3-1b-it",
-                    "tokenizer.json",
-                    "unsloth/gemma-3-1b-it-GGUF",
-                    "gemma-3-1b-it-Q4_K_M.gguf",
-                ),
-                Gemma3Size::Size4B => HfConfig::new(
-                    "google/gemma-3-4b-it",
-                    "tokenizer.json",
-                    "unsloth/gemma-3-4b-it-GGUF",
-                    "gemma-3-4b-it-Q4_K_M.gguf",
-                ),
-                Gemma3Size::Size12B => HfConfig::new(
-                    "google/gemma-3-12b-it",
-                    "tokenizer.json",
-                    "unsloth/gemma-3-12b-it-GGUF",
-                    "gemma-3-12b-it-Q4_K_M.gguf",
-                ),
-                Gemma3Size::Size27B => HfConfig::new(
-                    "google/gemma-3-27b-it",
-                    "tokenizer.json",
-                    "unsloth/gemma-3-27b-it-GGUF",
-                    "gemma-3-27b-it-Q4_K_M.gguf",
-                ),
-            },
-            ModelOptions::Phi4(size) => match size {
-                Phi4Size::Size14B => HfConfig::new(
-                    "microsoft/phi-4",
-                    "tokenizer.json",
-                    "microsoft/phi-4-gguf",
-                    "phi-4-q4.gguf",
-                ),
-            },
-            ModelOptions::Qwen3(size) => match size {
-                Qwen3Size::Size0_6B => HfConfig::new(
-                    "Qwen/Qwen3-0.6B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-0.6B-GGUF",
-                    "Qwen3-0.6B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size1_7B => HfConfig::new(
-                    "Qwen/Qwen3-1.7B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-1.7B-GGUF",
-                    "Qwen3-1.7B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size4B => HfConfig::new(
-                    "Qwen/Qwen3-4B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-4B-GGUF",
-                    "Qwen3-4B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size8B => HfConfig::new(
-                    "Qwen/Qwen3-8B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-8B-GGUF",
-                    "Qwen3-8B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size14B => HfConfig::new(
-                    "Qwen/Qwen3-14B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-14B-GGUF",
-                    "Qwen3-14B-Q4_K_M.gguf",
-                ),
-                Qwen3Size::Size32B => HfConfig::new(
-                    "Qwen/Qwen3-32B",
-                    "tokenizer.json",
-                    "unsloth/Qwen3-32B-GGUF",
-                    "Qwen3-32B-Q4_K_M.gguf",
-                ),
-            },
-        }
-    }
-
     /// Construct the quantized model instance and return with its HfConfig
     pub(crate) fn build_model(
         self,
         params: GenerationParams,
-    ) -> anyhow::Result<(HfConfig, Box<dyn LargeLanguageModel>)> {
-        let hf = self.hf_config();
-        let cfg = ModelConfig::new(params, hf.clone())?;
-        let model: Box<dyn LargeLanguageModel> = match self {
-            ModelOptions::Gemma3(_) => Box::new(QuantizedGemma3Model::new(cfg)?),
-            ModelOptions::Phi4(_) => Box::new(QuantizedPhi4Model::new(cfg)?),
-            ModelOptions::Qwen3(_) => Box::new(QuantizedQwen3Model::new(cfg)?),
+    ) -> anyhow::Result<Box<dyn TextGenerationModel>> {
+        let cfg = ModelConfig::new(params)?;
+        let model: Box<dyn TextGenerationModel> = match self {
+            ModelOptions::Gemma3(size) => Box::new(QuantizedGemma3Model::new(cfg, size)?),
+            ModelOptions::Qwen3(size) => Box::new(QuantizedQwen3Model::new(cfg, size)?),
+            ModelOptions::Phi4(size) => Box::new(QuantizedPhi4Model::new(cfg, size)?),
         };
-        Ok((hf, model))
+        Ok(model)
     }
 }
 
@@ -148,7 +53,6 @@ impl ModelOptions {
 /// - `.repeat_penalty(f32)`: penalty for repeated tokens (default: DEFAULT_REPEAT_PENALTY)
 /// - `.repeat_last_n(usize)`: context length for repeat penalty (default: DEFAULT_REPEAT_LAST_N)
 /// - `.seed(u64)`: random seed (default: DEFAULT_SEED)
-/// - `.use_flash_attn(bool)`: enable flash attention for supported models (default: false)
 ///
 /// Finally, call `.build()` to obtain a `TextGenerationPipeline`.
 pub struct TextGenerationPipelineBuilder {
@@ -157,7 +61,6 @@ pub struct TextGenerationPipelineBuilder {
     repeat_penalty: Option<f32>,
     repeat_last_n: Option<usize>,
     seed: Option<u64>,
-    use_flash_attn: Option<bool>,
 }
 
 impl TextGenerationPipelineBuilder {
@@ -168,7 +71,6 @@ impl TextGenerationPipelineBuilder {
             repeat_penalty: None,
             repeat_last_n: None,
             seed: None,
-            use_flash_attn: None,
         }
     }
 
@@ -192,32 +94,38 @@ impl TextGenerationPipelineBuilder {
         self
     }
 
-    pub fn use_flash_attn(mut self, use_flash_attn: bool) -> Self {
-        self.use_flash_attn = Some(use_flash_attn);
-        self
-    }
-
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline> {
         let temperature = self.temperature.unwrap_or(crate::DEFAULT_TEMPERATURE);
         let repeat_penalty = self.repeat_penalty.unwrap_or(crate::DEFAULT_REPEAT_PENALTY);
         let repeat_last_n = self.repeat_last_n.unwrap_or(crate::DEFAULT_REPEAT_LAST_N);
         let seed = self.seed.unwrap_or(crate::DEFAULT_SEED);
-        let use_flash_attn = self.use_flash_attn.unwrap_or(false);
 
-        let generation_params = GenerationParams::new(
-            temperature,
-            repeat_penalty,
-            repeat_last_n,
-            seed,
-            use_flash_attn,
-        );
+        let generation_params =
+            GenerationParams::new(temperature, repeat_penalty, repeat_last_n, seed);
 
-        // Build the HfConfig and model in one go via the nested enum helper
-        let (hf_config, model) = self.model_choice.build_model(generation_params)?;
+        let model = self.model_choice.build_model(generation_params)?;
+        let tokenizer = model.load_tokenizer()?;
 
-        let tokenizer = crate::utils::load_tokenizer(&hf_config)?;
+        // Get EOS token ID
+        let eos_token_str = model.get_eos_token_str();
+        let eos_token_encoding = tokenizer.encode(eos_token_str, false).map_err(|e| {
+            anyhow::anyhow!("Failed to encode EOS token '{}': {}", eos_token_str, e)
+        })?;
+        let eos_ids = eos_token_encoding.get_ids();
+        if eos_ids.len() != 1 {
+            anyhow::bail!(
+                "EOS token string '{}' did not tokenize to a single ID. Got: {:?}",
+                eos_token_str,
+                eos_ids
+            );
+        }
+        let eos_token_id = eos_ids[0];
 
-        Ok(TextGenerationPipeline { model, tokenizer })
+        Ok(TextGenerationPipeline {
+            model,
+            tokenizer,
+            eos_token_id,
+        })
     }
 }
 
@@ -242,21 +150,51 @@ impl TextGenerationPipelineBuilder {
 /// ```
 pub struct TextGenerationPipeline {
     /// Tokenizer corresponding to the model's vocabulary.
-    model: Box<dyn LargeLanguageModel>,
+    model: Box<dyn TextGenerationModel>,
     tokenizer: Tokenizer,
+    eos_token_id: u32,
 }
 
 impl TextGenerationPipeline {
-    pub fn generate_text(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
-        self.model.prompt_model(&self.tokenizer, prompt, max_length)
-    }
-}
+    pub fn prompt_completion(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
+        // Format the prompt
+        let formatted_prompt = self.model.format_prompt(prompt);
 
-pub(crate) trait LargeLanguageModel {
-    fn prompt_model(
+        // Turn the prompt into tokens
+        let prompt_tokens = self.tokenizer.encode(formatted_prompt, true).unwrap();
+
+        // Generate the response with the prompt tokens
+        let response_as_tokens = self
+            .model
+            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
+            .unwrap();
+
+        // Turn the response tokens back into a string
+        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+
+        Ok(response)
+    }
+
+    pub fn message_completion(
         &self,
-        tokenizer: &Tokenizer,
-        prompt: &str,
+        messages: Vec<Message>,
         max_length: usize,
-    ) -> anyhow::Result<String>;
+    ) -> anyhow::Result<String> {
+        // Format the messages
+        let formatted_messages = self.model.format_messages(messages);
+
+        // Turn the prompt into tokens
+        let prompt_tokens = self.tokenizer.encode(formatted_messages, true).unwrap();
+
+        // Generate the response with the prompt tokens
+        let response_as_tokens = self
+            .model
+            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
+            .unwrap();
+
+        // Turn the response tokens back into a string
+        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+
+        Ok(response)
+    }
 }

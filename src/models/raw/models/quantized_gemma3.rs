@@ -421,8 +421,12 @@ impl ModelWeights {
             span_output,
         })
     }
+}
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+use super::super::super::ModelWeightForward;
+
+impl ModelWeightForward for ModelWeights {
+    fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len) = x.dims2()?;
         let _enter = self.span.enter();
 
