@@ -1,23 +1,21 @@
 use crate::models::raw::models::{quantized_gemma3, quantized_phi3, quantized_qwen3};
 use crate::utils::model_cache::ModelCacheKey;
-use candle_core::{Result, Tensor};
-use candle_nn::kv_cache::KvCache;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 /// Global cache for shared model instances
 pub struct SharedModelCache {
     qwen3_weights: Mutex<HashMap<ModelCacheKey, Weak<quantized_qwen3::Weights>>>,
-    gemma3_models: Mutex<HashMap<ModelCacheKey, Weak<quantized_gemma3::ModelWeights>>>,
-    phi4_models: Mutex<HashMap<ModelCacheKey, Weak<quantized_phi3::ModelWeights>>>,
+    gemma3_weights: Mutex<HashMap<ModelCacheKey, Weak<quantized_gemma3::Weights>>>,
+    phi4_weights: Mutex<HashMap<ModelCacheKey, Weak<quantized_phi3::Weights>>>,
 }
 
 impl SharedModelCache {
     fn new() -> Self {
         Self {
             qwen3_weights: Mutex::new(HashMap::new()),
-            gemma3_models: Mutex::new(HashMap::new()),
-            phi4_models: Mutex::new(HashMap::new()),
+            gemma3_weights: Mutex::new(HashMap::new()),
+            phi4_weights: Mutex::new(HashMap::new()),
         }
     }
 
@@ -71,113 +69,104 @@ impl SharedModelCache {
         Ok(arc_weights)
     }
 
-    /// Get or load a Qwen3 model from the cache (backward compatibility)
-    pub fn get_or_load_qwen3<F>(
+    /// Get or load Gemma3 weights from the cache
+    pub fn get_or_load_gemma3_weights<F>(
         &self,
         key: ModelCacheKey,
         loader: F,
-    ) -> anyhow::Result<Arc<quantized_qwen3::ModelWeights>>
+    ) -> anyhow::Result<Arc<quantized_gemma3::Weights>>
     where
-        F: FnOnce() -> anyhow::Result<quantized_qwen3::ModelWeights>,
-    {
-        // For backward compatibility, we still support the old ModelWeights approach
-        // This will be removed once all models are migrated to the new approach
-        let model = loader()?;
-        Ok(Arc::new(model))
-    }
-
-    /// Get or load a Gemma3 model from the cache
-    pub fn get_or_load_gemma3<F>(
-        &self,
-        key: ModelCacheKey,
-        loader: F,
-    ) -> anyhow::Result<Arc<quantized_gemma3::ModelWeights>>
-    where
-        F: FnOnce() -> anyhow::Result<quantized_gemma3::ModelWeights>,
+        F: FnOnce() -> anyhow::Result<quantized_gemma3::Weights>,
     {
         // First check: try to get from cache
         {
-            let mut cache = self.gemma3_models.lock().unwrap();
+            let mut cache = self.gemma3_weights.lock().unwrap();
             if let Some(weak_ref) = cache.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
-                    println!("Using cached Gemma3 model - shared weights!");
+                    // Model is still alive, return it
+                    println!("Using cached Gemma3 weights - shared across pipelines!");
                     return Ok(strong_ref);
                 }
+                // Dead reference, remove it
                 cache.remove(&key);
             }
         }
 
         // Cache miss or dead reference, load new model outside the lock
-        println!("Loading new Gemma3 model into cache...");
-        let model = loader()?;
-        let arc_model = Arc::new(model);
+        println!("Loading new Gemma3 weights into cache...");
+        let weights = loader()?;
+        let arc_weights = Arc::new(weights);
 
         // Second check: re-acquire lock and check again before inserting
         {
-            let mut cache = self.gemma3_models.lock().unwrap();
+            let mut cache = self.gemma3_weights.lock().unwrap();
             // Check if another thread loaded the model while we were loading
             if let Some(weak_ref) = cache.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Another thread loaded it, use their version
-                    println!("Using Gemma3 model loaded by another thread!");
+                    println!("Using Gemma3 weights loaded by another thread!");
                     return Ok(strong_ref);
                 }
+                // Dead reference, remove it
                 cache.remove(&key);
             }
 
             // Store our loaded model in cache
-            let weak_ref = Arc::downgrade(&arc_model);
+            let weak_ref = Arc::downgrade(&arc_weights);
             cache.insert(key, weak_ref);
         }
 
-        Ok(arc_model)
+        Ok(arc_weights)
     }
 
-    /// Get or load a Phi4 model from the cache
-    pub fn get_or_load_phi4<F>(
+    /// Get or load Phi4 weights from the cache
+    pub fn get_or_load_phi4_weights<F>(
         &self,
         key: ModelCacheKey,
         loader: F,
-    ) -> anyhow::Result<Arc<quantized_phi3::ModelWeights>>
+    ) -> anyhow::Result<Arc<quantized_phi3::Weights>>
     where
-        F: FnOnce() -> anyhow::Result<quantized_phi3::ModelWeights>,
+        F: FnOnce() -> anyhow::Result<quantized_phi3::Weights>,
     {
         // First check: try to get from cache
         {
-            let mut cache = self.phi4_models.lock().unwrap();
+            let mut cache = self.phi4_weights.lock().unwrap();
             if let Some(weak_ref) = cache.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
-                    println!("Using cached Phi4 model - shared weights!");
+                    // Model is still alive, return it
+                    println!("Using cached Phi4 weights - shared across pipelines!");
                     return Ok(strong_ref);
                 }
+                // Dead reference, remove it
                 cache.remove(&key);
             }
         }
 
         // Cache miss or dead reference, load new model outside the lock
-        println!("Loading new Phi4 model into cache...");
-        let model = loader()?;
-        let arc_model = Arc::new(model);
+        println!("Loading new Phi4 weights into cache...");
+        let weights = loader()?;
+        let arc_weights = Arc::new(weights);
 
         // Second check: re-acquire lock and check again before inserting
         {
-            let mut cache = self.phi4_models.lock().unwrap();
+            let mut cache = self.phi4_weights.lock().unwrap();
             // Check if another thread loaded the model while we were loading
             if let Some(weak_ref) = cache.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Another thread loaded it, use their version
-                    println!("Using Phi4 model loaded by another thread!");
+                    println!("Using Phi4 weights loaded by another thread!");
                     return Ok(strong_ref);
                 }
+                // Dead reference, remove it
                 cache.remove(&key);
             }
 
             // Store our loaded model in cache
-            let weak_ref = Arc::downgrade(&arc_model);
+            let weak_ref = Arc::downgrade(&arc_weights);
             cache.insert(key, weak_ref);
         }
 
-        Ok(arc_model)
+        Ok(arc_weights)
     }
 }
 

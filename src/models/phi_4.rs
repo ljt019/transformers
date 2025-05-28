@@ -18,7 +18,7 @@ pub enum Phi4Size {
 }
 
 pub struct QuantizedPhi4Model {
-    weights: RefCell<quantized_phi3::ModelWeights>,
+    pipeline_state: RefCell<quantized_phi3::PipelineState>,
     config: ModelConfig,
 }
 
@@ -29,18 +29,18 @@ impl QuantizedPhi4Model {
             crate::pipelines::text_generation_pipeline::ModelOptions::Phi4(size.clone());
         let cache_key = ModelCacheKey::new(&model_option, &config.device);
 
-        // Get shared model or load new one
+        // Get shared weights or load new ones
         let shared_cache = get_global_shared_model_cache();
-        let shared_weights = shared_cache.get_or_load_phi4(cache_key, || {
+        let shared_weights = shared_cache.get_or_load_phi4_weights(cache_key, || {
             QuantizedPhi4Model::load_model_weights(config.device.clone(), size.clone())
         })?;
 
-        // Clone the shared model to get fresh KV cache state for this pipeline
-        let cloned_weights = (*shared_weights).clone();
-        let weights_refcell = RefCell::new(cloned_weights);
+        // Create pipeline state with shared weights and individual KV caches
+        let pipeline_state = quantized_phi3::PipelineState::new(shared_weights);
+        let pipeline_state_refcell = RefCell::new(pipeline_state);
 
         Ok(Self {
-            weights: weights_refcell,
+            pipeline_state: pipeline_state_refcell,
             config,
         })
     }
@@ -48,7 +48,7 @@ impl QuantizedPhi4Model {
     pub fn load_model_weights(
         device: candle_core::Device,
         size: Phi4Size,
-    ) -> anyhow::Result<quantized_phi3::ModelWeights> {
+    ) -> anyhow::Result<quantized_phi3::Weights> {
         let (repo, file_name) = match size {
             Phi4Size::Size14B => ("microsoft/phi-4-gguf", "phi-4-q4.gguf"),
         };
@@ -58,7 +58,7 @@ impl QuantizedPhi4Model {
             file_name,
             &device,
             |gguf_content, gguf_file, device| {
-                quantized_phi3::ModelWeights::from_gguf(false, gguf_content, gguf_file, device)
+                quantized_phi3::Weights::from_gguf(false, gguf_content, gguf_file, device)
                     .map_err(|e| anyhow::anyhow!("Failed to create Phi4 model weights: {}", e))
             },
         )
@@ -126,7 +126,7 @@ impl TextGenerationModel for QuantizedPhi4Model {
         max_len: usize,
         eos_token: u32,
     ) -> anyhow::Result<Vec<u32>> {
-        let mut specific_weights_ref_mut = self.weights.borrow_mut();
+        let mut specific_weights_ref_mut = self.pipeline_state.borrow_mut();
 
         let response_tokens = generate_tokens_from_prompt(
             prompt_tokens,

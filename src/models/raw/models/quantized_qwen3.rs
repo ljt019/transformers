@@ -509,7 +509,7 @@ impl Weights {
         };
 
         // Convert boolean mask to float with NEG_INFINITY for False, 0.0 for True
-        let zero = Tensor::zeros_like(&mask)?;
+        let zero = Tensor::zeros_like(&mask)?.to_dtype(self.dtype)?;
         let neg_inf =
             Tensor::new(&[f32::NEG_INFINITY], &self.device)?.broadcast_as(mask.shape())?;
         let float_mask = mask.where_cond(&zero, &neg_inf)?;
@@ -921,7 +921,7 @@ impl ModelWeights {
         };
 
         // Convert boolean mask to float with NEG_INFINITY for False, 0.0 for True
-        let zero = Tensor::zeros_like(&mask)?;
+        let zero = Tensor::zeros_like(&mask)?.to_dtype(self.dtype)?;
         let neg_inf =
             Tensor::new(&[f32::NEG_INFINITY], &self.device)?.broadcast_as(mask.shape())?;
         let float_mask = mask.where_cond(&zero, &neg_inf)?;

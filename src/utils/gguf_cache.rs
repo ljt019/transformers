@@ -52,7 +52,7 @@ impl GgufCache {
         // Cache miss or dead reference, load new GGUF data outside the lock
         println!("Loading GGUF file: {}/{}", repo, filename);
         let gguf_loader = GgufModelLoader::new(repo, filename);
-        let (mut gguf_file, gguf_content) = gguf_loader.load()?;
+        let (mut gguf_file, _) = gguf_loader.load()?;
 
         // Read the entire file into memory for caching
         use std::io::{Read, Seek, SeekFrom};

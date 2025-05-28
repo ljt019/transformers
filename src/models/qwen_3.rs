@@ -186,8 +186,6 @@ impl TextGenerationModel for QuantizedQwen3Model {
             })
             .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
 
-        println!("{}", rendered);
-
         Ok(rendered)
     }
 

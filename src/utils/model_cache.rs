@@ -4,6 +4,22 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, Weak};
 
+/// Trait for cache entries that can check if they are still alive
+trait CacheEntry: std::any::Any + Send + Sync {
+    fn is_alive(&self) -> bool;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: Send + Sync + 'static> CacheEntry for Weak<T> {
+    fn is_alive(&self) -> bool {
+        self.upgrade().is_some()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// A unique identifier for a cached model based on its configuration
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelCacheKey {
@@ -46,7 +62,7 @@ impl ModelCacheKey {
 
         let (device_type, device_id) = match device {
             Device::Cpu => ("CPU".to_string(), None),
-            Device::Cuda(_cuda_device) => ("CUDA".to_string(), Some(0)), // Simplified for now
+            Device::Cuda(cuda_device) => ("CUDA".to_string(), Some(0)), // Simplified for now
             Device::Metal(_metal_device) => ("Metal".to_string(), Some(0)), // Simplified for now
         };
 
@@ -64,7 +80,7 @@ pub trait SharedModelData: Send + Sync {}
 
 /// Global cache for model instances
 pub struct ModelCache {
-    cache: Mutex<HashMap<ModelCacheKey, Box<dyn std::any::Any + Send + Sync>>>,
+    cache: Mutex<HashMap<ModelCacheKey, Box<dyn CacheEntry>>>,
 }
 
 impl ModelCache {
@@ -83,9 +99,9 @@ impl ModelCache {
         let mut cache = self.cache.lock().unwrap();
 
         // Check if we have a cached weak reference
-        if let Some(any_weak) = cache.get(&key) {
+        if let Some(cache_entry) = cache.get(&key) {
             // Try to downcast to Weak<T>
-            if let Some(weak_ref) = any_weak.downcast_ref::<Weak<T>>() {
+            if let Some(weak_ref) = cache_entry.as_any().downcast_ref::<Weak<T>>() {
                 // Try to upgrade the weak reference
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Model is still alive, return it
@@ -118,11 +134,9 @@ impl ModelCache {
     /// Remove dead weak references from the cache
     pub fn cleanup_dead_references(&self) {
         let mut cache = self.cache.lock().unwrap();
-        cache.retain(|_, weak_any| {
-            // This is a simplified check - in a real implementation you'd need
-            // to check each type specifically. For now, we'll rely on natural cleanup
-            // when get_or_load is called.
-            true
+        cache.retain(|_, cache_entry| {
+            // Check if the weak reference is still alive
+            cache_entry.is_alive()
         });
     }
 }
