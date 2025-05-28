@@ -1,6 +1,10 @@
 use crate::models::raw::models::quantized_qwen3;
+use crate::models::shared::get_global_shared_model_cache;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
+use crate::utils::gguf_cache::create_model_weights_from_cache;
+use crate::utils::loaders::{HfLoader, TokenizerLoader};
+use crate::utils::model_cache::ModelCacheKey;
+use anyhow::Context;
 use minijinja::{context, Environment};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -8,6 +12,7 @@ use std::cell::RefCell;
 use crate::models::generate_tokens_from_prompt;
 use crate::pipelines::TextGenerationModel;
 use crate::Message;
+
 #[derive(Clone)]
 pub enum Qwen3Size {
     Size0_6B,
@@ -19,18 +24,29 @@ pub enum Qwen3Size {
 }
 
 pub struct QuantizedQwen3Model {
-    weights: RefCell<quantized_qwen3::ModelWeights>,
+    pipeline_state: RefCell<quantized_qwen3::PipelineState>,
     config: ModelConfig,
 }
 
 impl QuantizedQwen3Model {
     pub fn new(config: ModelConfig, size: Qwen3Size) -> anyhow::Result<Self> {
-        let specific_weights =
-            QuantizedQwen3Model::load_model_weights(config.device.clone(), size.clone())?;
-        let weights_refcell = RefCell::new(specific_weights);
+        // Create cache key for this model configuration
+        let model_option =
+            crate::pipelines::text_generation_pipeline::ModelOptions::Qwen3(size.clone());
+        let cache_key = ModelCacheKey::new(&model_option, &config.device);
+
+        // Get shared weights or load new ones
+        let shared_cache = get_global_shared_model_cache();
+        let shared_weights = shared_cache.get_or_load_qwen3_weights(cache_key, || {
+            QuantizedQwen3Model::load_model_weights(config.device.clone(), size.clone())
+        })?;
+
+        // Create pipeline state with shared weights and individual KV caches
+        let pipeline_state = quantized_qwen3::PipelineState::new(shared_weights);
+        let pipeline_state_refcell = RefCell::new(pipeline_state);
 
         Ok(Self {
-            weights: weights_refcell,
+            pipeline_state: pipeline_state_refcell,
             config,
         })
     }
@@ -38,7 +54,7 @@ impl QuantizedQwen3Model {
     pub fn load_model_weights(
         device: candle_core::Device,
         size: Qwen3Size,
-    ) -> anyhow::Result<quantized_qwen3::ModelWeights> {
+    ) -> anyhow::Result<quantized_qwen3::Weights> {
         let (repo, file_name) = match size {
             Qwen3Size::Size0_6B => ("unsloth/Qwen3-0.6B-GGUF", "Qwen3-0.6B-Q4_K_M.gguf"),
             Qwen3Size::Size1_7B => ("unsloth/Qwen3-1.7B-GGUF", "Qwen3-1.7B-Q4_K_M.gguf"),
@@ -48,14 +64,15 @@ impl QuantizedQwen3Model {
             Qwen3Size::Size32B => ("unsloth/Qwen3-32B-GGUF", "Qwen3-32B-Q4_K_M.gguf"),
         };
 
-        let gguf_loader = GgufModelLoader::new(repo, file_name);
-
-        let (mut gguf_file, gguf_content) = gguf_loader.load()?;
-
-        let qwen3_model_weights =
-            quantized_qwen3::ModelWeights::from_gguf(gguf_content, &mut gguf_file, &device)?;
-
-        Ok(qwen3_model_weights)
+        create_model_weights_from_cache(
+            repo,
+            file_name,
+            &device,
+            |gguf_content, gguf_file, device| {
+                quantized_qwen3::Weights::from_gguf(gguf_content, gguf_file, device)
+                    .map_err(|e| anyhow::anyhow!("Failed to create Qwen3 weights: {}", e))
+            },
+        )
     }
 }
 
@@ -77,17 +94,24 @@ impl TextGenerationModel for QuantizedQwen3Model {
         format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
     }
 
-    fn format_messages(&self, messages: Vec<Message>) -> String {
+    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
         // Create a loader for the tokenizer config
         let tokenizer_config_loader = HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
         // Loads the tokenizer_config.json file and returns the path to the json file as a PathBuf
-        let tokenizer_config_path = tokenizer_config_loader.load().unwrap();
-        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path).unwrap();
+        let tokenizer_config_path = tokenizer_config_loader
+            .load()
+            .with_context(|| "failed to download tokenizer_config.json")?;
+        let tokenizer_config_content = std::fs::read_to_string(&tokenizer_config_path)
+            .with_context(|| format!("failed to read {:?}", tokenizer_config_path))?;
 
         // Parse JSON and get the 'chat_template'
-        let config_json: Value = serde_json::from_str(&tokenizer_config_content).unwrap();
-        let mut chat_template_str = config_json["chat_template"].as_str().unwrap().to_string();
+        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
+            .with_context(|| "failed to parse tokenizer_config.json")?;
+        let mut chat_template_str = config_json["chat_template"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?
+            .to_string();
 
         // Perform targeted template fixes:
         // 1) Reverse list usage
@@ -146,10 +170,13 @@ impl TextGenerationModel for QuantizedQwen3Model {
         });
 
         // Add the patched template
-        env.add_template("chat", &chat_template_str).unwrap();
+        env.add_template("chat", &chat_template_str)
+            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
 
         // Get the template
-        let tmpl = env.get_template("chat").unwrap();
+        let tmpl = env
+            .get_template("chat")
+            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
 
         // Render the template
         let rendered = tmpl
@@ -157,11 +184,11 @@ impl TextGenerationModel for QuantizedQwen3Model {
                 messages => messages,
                 add_generation_prompt => true,
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
 
         println!("{}", rendered);
 
-        rendered
+        Ok(rendered)
     }
 
     fn prompt_with_tokens(
@@ -170,12 +197,12 @@ impl TextGenerationModel for QuantizedQwen3Model {
         max_len: usize,
         eos_token: u32,
     ) -> anyhow::Result<Vec<u32>> {
-        let mut specific_weights_ref_mut = self.weights.borrow_mut();
+        let mut pipeline_state_ref_mut = self.pipeline_state.borrow_mut();
 
         let response_tokens = generate_tokens_from_prompt(
             prompt_tokens,
             &self.config.params,
-            &mut *specific_weights_ref_mut,
+            &mut *pipeline_state_ref_mut,
             max_len,
             &self.config.device,
             eos_token,

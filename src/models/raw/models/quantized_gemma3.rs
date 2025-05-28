@@ -19,7 +19,7 @@ use candle_core::quantized::gguf_file;
 use candle_core::quantized::QTensor;
 use candle_core::D;
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::{kv_cache::KvCache, Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
@@ -133,7 +133,7 @@ struct LayerWeights {
     neg_inf: Tensor,
 
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: KvCache,
 
     // Tracing
     span_attn: tracing::Span,
@@ -207,19 +207,13 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
+        // Reset KV cache if we're at the first position
+        if index_pos == 0 {
+            self.kv_cache.reset();
+        }
+        let k_contiguous = k.contiguous()?;
+        let v_contiguous = v.contiguous()?;
+        let (k, v) = self.kv_cache.append(&k_contiguous, &v_contiguous)?;
 
         // Repeat KV for GQA
         let k = super::super::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
@@ -402,7 +396,7 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
+                kv_cache: KvCache::new(2, 64),
                 span_attn,
                 span_mlp,
             })

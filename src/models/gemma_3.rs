@@ -1,7 +1,10 @@
 use crate::models::raw::models::quantized_gemma3;
+use crate::models::shared::get_global_shared_model_cache;
 use crate::pipelines::TextGenerationModel;
 use crate::utils::configs::ModelConfig;
-use crate::utils::loaders::{GgufModelLoader, HfLoader, TokenizerLoader};
+use crate::utils::gguf_cache::create_model_weights_from_cache;
+use crate::utils::loaders::{HfLoader, TokenizerLoader};
+use crate::utils::model_cache::ModelCacheKey;
 use minijinja::{context, Environment};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -24,13 +27,24 @@ pub struct QuantizedGemma3Model {
 
 impl QuantizedGemma3Model {
     pub fn new(config: ModelConfig, size: Gemma3Size) -> anyhow::Result<Self> {
-        let specific_weights =
-            QuantizedGemma3Model::load_model_weights(config.device.clone(), size.clone())?;
-        let weights_refcell = RefCell::new(specific_weights);
+        // Create cache key for this model configuration
+        let model_option =
+            crate::pipelines::text_generation_pipeline::ModelOptions::Gemma3(size.clone());
+        let cache_key = ModelCacheKey::new(&model_option, &config.device);
+
+        // Get shared model or load new one
+        let shared_cache = get_global_shared_model_cache();
+        let shared_weights = shared_cache.get_or_load_gemma3(cache_key, || {
+            QuantizedGemma3Model::load_model_weights(config.device.clone(), size.clone())
+        })?;
+
+        // Clone the shared model to get fresh KV cache state for this pipeline
+        let cloned_weights = (*shared_weights).clone();
+        let weights_refcell = RefCell::new(cloned_weights);
 
         Ok(Self {
             weights: weights_refcell,
-            config: config,
+            config,
         })
     }
 
@@ -45,14 +59,15 @@ impl QuantizedGemma3Model {
             Gemma3Size::Size27B => ("unsloth/gemma-3-27b-it-GGUF", "gemma-3-27b-it-Q4_K_M.gguf"),
         };
 
-        let gguf_loader = GgufModelLoader::new(repo, file_name);
-
-        let (mut gguf_file, gguf_content) = gguf_loader.load()?;
-
-        let gemma3_model_weights =
-            quantized_gemma3::ModelWeights::from_gguf(gguf_content, &mut gguf_file, &device)?;
-
-        Ok(gemma3_model_weights)
+        create_model_weights_from_cache(
+            repo,
+            file_name,
+            &device,
+            |gguf_content, gguf_file, device| {
+                quantized_gemma3::ModelWeights::from_gguf(gguf_content, gguf_file, device)
+                    .map_err(|e| anyhow::anyhow!("Failed to create Gemma3 model weights: {}", e))
+            },
+        )
     }
 }
 
@@ -70,24 +85,33 @@ impl TextGenerationModel for QuantizedGemma3Model {
         "<end_of_turn>"
     }
 
-    fn format_messages(&self, messages: Vec<Message>) -> String {
+    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
         // Create a loader for the tokenizer config (using the 1B model's repo)
         let tokenizer_config_loader =
             HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
         // Loads the tokenizer_config.json file
-        let tokenizer_config_path = tokenizer_config_loader.load().unwrap();
-        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path).unwrap();
+        let tokenizer_config_path = tokenizer_config_loader
+            .load()
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer config: {}", e))?;
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read tokenizer config file: {}", e))?;
 
         // Parse JSON and get the 'chat_template'
-        let config_json: Value = serde_json::from_str(&tokenizer_config_content).unwrap();
-        let chat_template = config_json["chat_template"].as_str().unwrap();
+        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse tokenizer config JSON: {}", e))?;
+        let chat_template = config_json["chat_template"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
 
         // Create a minijinja environment
         let mut env = Environment::new();
-        env.add_template("chat", chat_template).unwrap();
+        env.add_template("chat", chat_template)
+            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
 
-        let tmpl = env.get_template("chat").unwrap();
+        let tmpl = env
+            .get_template("chat")
+            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
 
         // Render the template
         let rendered = tmpl
@@ -95,9 +119,9 @@ impl TextGenerationModel for QuantizedGemma3Model {
                 messages => messages,
                 add_generation_prompt => true, // Common practice, adjust if needed
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
 
-        rendered
+        Ok(rendered)
     }
 
     fn format_prompt(&self, prompt: &str) -> String {

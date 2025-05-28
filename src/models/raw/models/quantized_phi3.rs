@@ -269,7 +269,7 @@ impl ModelWeights {
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
-            let kv_cache = KvCache::new(2, max_seq_len);
+            let kv_cache = KvCache::new(2, 64);
             layers.push(LayerWeights {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
