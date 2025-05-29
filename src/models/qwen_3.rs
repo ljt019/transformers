@@ -117,26 +117,42 @@ impl TextGenerationModel for QuantizedQwen3Model {
             .to_string();
 
         // Perform targeted template fixes:
-        // 1) Reverse list usage
+        // 1) Reverse list usage messages[::-1] -> messages|reverse
         chat_template_str = chat_template_str.replace("messages[::-1]", "messages|reverse");
-        // 2) Convert Python method calls to Jinja functions/tests
+
+        // 2) Convert Python method calls .startswith and .endswith to Jinja tests
         chat_template_str = chat_template_str.replace(
             ".startswith('<tool_response>')",
             " is startingwith \"<tool_response>\"",
         );
         chat_template_str = chat_template_str.replace(
             ".endswith('</tool_response>')",
-            " is endingwith \"</tool_response>\"",
+            " is endingwith \"<tool_response>\"",
         );
-        // 3) Replace split and method chaining with function pipeline
+
+        // 3) Targeted fixes for known problematic lines based on the debug output of chat_template_str
+
+        // Fixing: {%- set content = message.content.split('</think>')[-1].lstrip('\n') %}
         chat_template_str = chat_template_str.replace(
-            "message.content.split('</think>')[-1].lstrip('\n')",
-            "lstrip(last(split(message.content, \"</think>\")), \"\\n\")",
+            "{%- set content = message.content.split('</think>')[-1].lstrip('\\n') %}",
+            "{%- set content = lstrip(last(split(message.content, \"</think>\")), \"\\n\") %}",
         );
+
+        // Fixing: {%- set reasoning_content = message.content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
         chat_template_str = chat_template_str.replace(
-            "message.content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n')",
-            "lstrip(last(split(rstrip(first(split(message.content, \"</think>\")), \"\\n\"), \"<think>\")), \"\\n\")"
+            "{%- set reasoning_content = message.content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}",
+            "{%- set reasoning_content = lstrip(last(split(rstrip(first(split(message.content, \"</think>\")), \"\\n\"), \"<think>\")), \"\\n\") %}"
         );
+
+        // Fixing: reasoning_content.strip('\n') within the assistant message block
+        chat_template_str = chat_template_str.replace(
+            "reasoning_content.strip('\\n')",
+            "strip(reasoning_content, '\\n')",
+        );
+
+        // Fixing: content.lstrip('\n') at the end of the assistant message block
+        chat_template_str =
+            chat_template_str.replace("+ content.lstrip('\\n') }}", "+ lstrip(content, '\\n') }}");
 
         // Create a minijinja environment
         let mut env = Environment::new();

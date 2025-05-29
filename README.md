@@ -1,4 +1,4 @@
-# transformers v0.0.7
+# transformers v0.0.8
 
 <!-- CI / Workflow Badges -->
 [<img alt="crates.io" src="https://img.shields.io/crates/v/transformers.svg?style=for-the-badge&color=fc8d62&logo=rust" height="19">](https://crates.io/crates/transformers)
