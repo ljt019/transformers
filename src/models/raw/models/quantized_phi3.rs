@@ -66,28 +66,9 @@ impl Module for Mlp {
 }
 
 fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm> {
-    let w = w.dequantize(&w.device())?;
+    let w = w.dequantize(&Device::Cpu)?;
     let rms = RmsNorm::new(w, eps);
     Ok(rms)
-}
-
-#[derive(Debug, Clone)]
-struct LayerWeights {
-    attn_qkv: QLinear,
-    attn_output: QLinear,
-    attn_norm: RmsNorm,
-    ffn_norm: RmsNorm,
-    mlp: Mlp,
-    n_head: usize,
-    n_kv_head: usize,
-    head_dim: usize,
-    cos: Tensor,
-    sin: Tensor,
-    neg_inf: Tensor,
-    kv_cache: KvCache,
-    use_flash_attn: bool,
-    span_attn: tracing::Span,
-    span_rot: tracing::Span,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
@@ -96,7 +77,62 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
     Ok(m)
 }
 
-impl LayerWeights {
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
+fn precomput_freqs_cis(
+    head_dim: usize,
+    max_seq_len: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
+    let theta: Vec<_> = (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
+        .collect();
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, max_seq_len as u32, device)?
+        .to_dtype(DType::F32)?
+        .reshape((max_seq_len, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let cos = idx_theta.cos()?;
+    let sin = idx_theta.sin()?;
+    Ok((cos, sin))
+}
+
+// Generic layer weights base struct to eliminate duplication
+#[derive(Debug, Clone)]
+pub struct LayerWeightsBase {
+    pub attn_qkv: QLinear,
+    pub attn_output: QLinear,
+    pub attn_norm: RmsNorm,
+    pub ffn_norm: RmsNorm,
+    pub mlp: Mlp,
+    pub n_head: usize,
+    pub n_kv_head: usize,
+    pub head_dim: usize,
+    pub cos: Tensor,
+    pub sin: Tensor,
+    pub neg_inf: Tensor,
+    pub use_flash_attn: bool,
+    pub span_attn: tracing::Span,
+    pub span_rot: tracing::Span,
+}
+
+impl LayerWeightsBase {
     fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _n_embd) = xs.dims4()?;
@@ -105,11 +141,12 @@ impl LayerWeights {
         candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
     }
 
-    fn forward_attn(
-        &mut self,
+    fn forward_attn_shared(
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         index_pos: usize,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -124,28 +161,27 @@ impl LayerWeights {
             self.n_kv_head * self.head_dim,
         )?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let q = q.reshape((b_sz, seq_len, self.n_head, self.head_dim))?;
+        let k = k.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
+        let v = v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
 
-        let q = self.apply_rotary_emb(&q, index_pos)?.contiguous()?;
+        let q = q.transpose(1, 2)?;
+        let k = k.transpose(1, 2)?;
+        let v = v.transpose(1, 2)?;
+
+        let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
+        // Update KV cache
         if index_pos == 0 {
-            self.kv_cache.reset();
+            kv_cache.reset();
         }
         let k_cont = k.contiguous()?;
         let v_cont = v.contiguous()?;
-        let (k, v) = self.kv_cache.append(&k_cont, &v_cont)?;
+        let (k, v) = kv_cache.append(&k_cont, &v_cont)?;
 
-        let k = super::super::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = super::super::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
+        let k = super::super::utils::repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
+        let v = super::super::utils::repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
 
         let y = if self.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
@@ -175,20 +211,26 @@ impl LayerWeights {
     }
 }
 
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+#[derive(Debug, Clone)]
+struct LayerWeights {
+    base: LayerWeightsBase,
+    kv_cache: KvCache,
 }
 
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
+impl LayerWeights {
+    fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+        self.base.apply_rotary_emb(xs, index_pos)
+    }
+
+    fn forward_attn(
+        &mut self,
+        x: &Tensor,
+        mask: Option<&Tensor>,
+        index_pos: usize,
+    ) -> Result<Tensor> {
+        self.base
+            .forward_attn_shared(x, mask, index_pos, &mut self.kv_cache)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -200,26 +242,6 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
-}
-
-fn precomput_freqs_cis(
-    head_dim: usize,
-    max_seq_len: usize,
-    freq_base: f32,
-    device: &Device,
-) -> Result<(Tensor, Tensor)> {
-    let theta: Vec<_> = (0..head_dim)
-        .step_by(2)
-        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
-        .collect();
-    let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, max_seq_len as u32, device)?
-        .to_dtype(DType::F32)?
-        .reshape((max_seq_len, 1))?
-        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let cos = idx_theta.cos()?;
-    let sin = idx_theta.sin()?;
-    Ok((cos, sin))
 }
 
 impl ModelWeights {
@@ -244,6 +266,7 @@ impl ModelWeights {
         let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
         let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, max_seq_len, 10_000., device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
@@ -272,8 +295,9 @@ impl ModelWeights {
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
-            let kv_cache = KvCache::new(head_count_kv, 64);
-            layers.push(LayerWeights {
+            let kv_cache = KvCache::new(2, 64);
+
+            let base = LayerWeightsBase {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
                 attn_norm,
@@ -285,11 +309,12 @@ impl ModelWeights {
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
-                kv_cache,
                 use_flash_attn,
                 span_attn,
                 span_rot,
-            })
+            };
+
+            layers.push(LayerWeights { base, kv_cache });
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
@@ -332,15 +357,18 @@ impl ModelWeightForward for ModelWeights {
         let mut xs = self.tok_embeddings.forward(xs)?;
         for layer in self.layers.iter_mut() {
             let residual = &xs;
-            let ys = xs.apply(&layer.attn_norm)?;
+            let ys = xs.apply(&layer.base.attn_norm)?;
             let ys = layer.forward_attn(&ys, mask.as_ref(), index_pos)?;
             let ys = (ys + residual)?;
             let residual = &ys;
-            let ys = ys.apply(&layer.ffn_norm)?;
-            let ys = layer.mlp.forward(&ys)?;
+            let ys = ys.apply(&layer.base.ffn_norm)?;
+            let ys = layer.base.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = xs
+            .apply(&self.output_norm)?
+            .narrow(1, seq_len - 1, 1)?
+            .squeeze(1)?;
         let _enter = self.span_output.enter();
         self.output.forward(&xs)
     }
@@ -348,32 +376,15 @@ impl ModelWeightForward for ModelWeights {
 
 // New efficient architecture - shared weights with per-pipeline PipelineState
 
-/// Layer weights without KV cache (shareable)
+/// Layer weights without KV cache (shareable) - now using the same base
 #[derive(Debug, Clone)]
 pub struct LayerWeightsNoCache {
-    pub attn_qkv: QLinear,
-    pub attn_output: QLinear,
-    pub attn_norm: RmsNorm,
-    pub ffn_norm: RmsNorm,
-    pub mlp: Mlp,
-    pub n_head: usize,
-    pub n_kv_head: usize,
-    pub head_dim: usize,
-    pub cos: Tensor,
-    pub sin: Tensor,
-    pub neg_inf: Tensor,
-    pub use_flash_attn: bool,
-    pub span_attn: tracing::Span,
-    pub span_rot: tracing::Span,
+    pub base: LayerWeightsBase,
 }
 
 impl LayerWeightsNoCache {
     fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
-        let (_b_sz, _, seq_len, _n_embd) = xs.dims4()?;
-        let cos = self.cos.narrow(0, index_pos, seq_len)?;
-        let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
+        self.base.apply_rotary_emb(xs, index_pos)
     }
 
     fn forward_attn(
@@ -383,88 +394,11 @@ impl LayerWeightsNoCache {
         index_pos: usize,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
-        let _enter = self.span_attn.enter();
-        let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv = self.attn_qkv.forward(x)?;
-
-        let q = qkv.i((.., .., ..self.n_head * self.head_dim))?;
-        let k = qkv.i((
-            ..,
-            ..,
-            self.n_head * self.head_dim
-                ..self.n_head * self.head_dim + self.n_kv_head * self.head_dim,
-        ))?;
-        let v = qkv.i((
-            ..,
-            ..,
-            self.n_head * self.head_dim + self.n_kv_head * self.head_dim..,
-        ))?;
-
-        let q = q.reshape((b_sz, seq_len, self.n_head, self.head_dim))?;
-        let k = k.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
-
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
-
-        let q = self.apply_rotary_emb(&q, index_pos)?;
-        let k = self.apply_rotary_emb(&k, index_pos)?;
-
-        // Update KV cache
-        if index_pos == 0 {
-            kv_cache.reset();
-        }
-        let k_cont = k.contiguous()?;
-        let v_cont = v.contiguous()?;
-        let (k, v) = kv_cache.append(&k_cont, &v_cont)?;
-
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
-
-        let y = if self.use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.to_dtype(DType::BF16)?.transpose(1, 2)?;
-            let k = k.to_dtype(DType::BF16)?.transpose(1, 2)?;
-            let v = v.to_dtype(DType::BF16)?.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?
-                .to_dtype(DType::F32)?
-                .transpose(1, 2)?
-        } else {
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let att = match mask {
-                None => att,
-                Some(mask) => {
-                    let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill(&att, &mask, &self.neg_inf)?
-                }
-            };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v)?
-        };
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attn_output.forward(&y)?;
-        Ok(y)
+        self.base.forward_attn_shared(x, mask, index_pos, kv_cache)
     }
 }
 
-// Helper function for repeat_kv
-fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        Ok(x)
-    } else {
-        let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-        let x = x
-            .unsqueeze(2)?
-            .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-            .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-        Ok(x)
-    }
-}
-
-/// Shared model weights (immutable, shareable across pipelines)
+/// Shared model weights (immutable, shareable across pipelines) with mask caching
 #[derive(Debug, Clone)]
 pub struct Weights {
     pub tok_embeddings: Embedding,
@@ -474,6 +408,7 @@ pub struct Weights {
     pub device: Device,
     pub span: tracing::Span,
     pub span_output: tracing::Span,
+    mask_cache: HashMap<usize, Tensor>,
 }
 
 impl Weights {
@@ -498,6 +433,7 @@ impl Weights {
         let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
         let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, max_seq_len, 10_000., device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
@@ -526,7 +462,9 @@ impl Weights {
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
-            layers.push(LayerWeightsNoCache {
+            let kv_cache = KvCache::new(2, 64);
+
+            let base = LayerWeightsBase {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
                 attn_norm,
@@ -541,7 +479,9 @@ impl Weights {
                 use_flash_attn,
                 span_attn,
                 span_rot,
-            })
+            };
+
+            layers.push(LayerWeightsNoCache { base });
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
@@ -553,15 +493,21 @@ impl Weights {
             device: device.clone(),
             span,
             span_output,
+            mask_cache: HashMap::new(),
         })
     }
 
-    fn mask(&self, t: usize, device: &Device) -> Result<Tensor> {
-        let mask: Vec<_> = (0..t)
-            .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-            .collect();
-        let mask = Tensor::from_slice(&mask, (t, t), device)?;
-        Ok(mask)
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+        if let Some(mask) = self.mask_cache.get(&t) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
+            self.mask_cache.insert(t, mask.clone());
+            Ok(mask)
+        }
     }
 }
 
@@ -569,6 +515,7 @@ impl Weights {
 pub struct PipelineState {
     pub weights: Arc<Weights>,
     pub kv_caches: Vec<KvCache>,
+    mask_cache: HashMap<usize, Tensor>,
 }
 
 impl PipelineState {
@@ -577,14 +524,15 @@ impl PipelineState {
         let initial_cache_size = 64; // Small initial size, grows dynamically
         let kv_caches: Vec<KvCache> = (0..num_layers)
             .map(|layer_idx| {
-                let n_kv_head = shared_weights.layers[layer_idx].n_kv_head;
-                KvCache::new(n_kv_head, initial_cache_size)
+                let n_kv_head = shared_weights.layers[layer_idx].base.n_kv_head;
+                KvCache::new(2, initial_cache_size)
             })
             .collect();
 
         Self {
             weights: shared_weights,
             kv_caches,
+            mask_cache: HashMap::new(),
         }
     }
 
@@ -592,29 +540,45 @@ impl PipelineState {
         let num_layers = shared_weights.layers.len();
         let kv_caches: Vec<KvCache> = (0..num_layers)
             .map(|layer_idx| {
-                let n_kv_head = shared_weights.layers[layer_idx].n_kv_head;
-                KvCache::new(n_kv_head, initial_cache_size)
+                let n_kv_head = shared_weights.layers[layer_idx].base.n_kv_head;
+                KvCache::new(2, initial_cache_size)
             })
             .collect();
 
         Self {
             weights: shared_weights,
             kv_caches,
+            mask_cache: HashMap::new(),
         }
     }
 
-    pub fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+        if let Some(mask) = self.mask_cache.get(&t) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
+            self.mask_cache.insert(t, mask.clone());
+            Ok(mask)
+        }
+    }
+}
+
+impl ModelWeightForward for PipelineState {
+    fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.weights.mask(seq_len, xs.device())?)
+            Some(self.mask(seq_len, xs.device())?)
         };
         let _enter = self.weights.span.enter();
         let mut xs = self.weights.tok_embeddings.forward(xs)?;
         for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
             let residual = &xs;
-            let ys = xs.apply(&layer.attn_norm)?;
+            let ys = xs.apply(&layer.base.attn_norm)?;
             let ys = layer.forward_attn(
                 &ys,
                 mask.as_ref(),
@@ -623,20 +587,15 @@ impl PipelineState {
             )?;
             let ys = (ys + residual)?;
             let residual = &ys;
-            let ys = ys.apply(&layer.ffn_norm)?;
-            let ys = layer.mlp.forward(&ys)?;
+            let ys = ys.apply(&layer.base.ffn_norm)?;
+            let ys = layer.base.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
         let xs = xs
             .apply(&self.weights.output_norm)?
-            .i((.., seq_len - 1, ..))?;
+            .narrow(1, seq_len - 1, 1)?
+            .squeeze(1)?;
         let _enter = self.weights.span_output.enter();
         self.weights.output.forward(&xs)
-    }
-}
-
-impl ModelWeightForward for PipelineState {
-    fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
-        self.forward(xs, index_pos)
     }
 }

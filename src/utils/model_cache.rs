@@ -1,150 +1,52 @@
-use crate::pipelines::text_generation_pipeline::{Gemma3Size, ModelOptions, Phi4Size, Qwen3Size};
+//! Model cache key for identifying cached models across different configurations.
+
+use anyhow::Result;
 use candle_core::Device;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, Weak};
 
-/// Trait for cache entries that can check if they are still alive
-trait CacheEntry: std::any::Any + Send + Sync {
-    fn is_alive(&self) -> bool;
-    fn as_any(&self) -> &dyn std::any::Any;
-}
-
-impl<T: Send + Sync + 'static> CacheEntry for Weak<T> {
-    fn is_alive(&self) -> bool {
-        self.upgrade().is_some()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-/// A unique identifier for a cached model based on its configuration
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Configuration key for caching models based on model path and device
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelCacheKey {
-    model_family: String,
-    model_size: String,
-    device_type: String,
-    device_id: Option<usize>,
+    pub model_path: String,
+    pub device_type: String,
+    pub device_id: Option<usize>,
+    pub model_hash: u64,
 }
 
 impl ModelCacheKey {
-    pub fn new(model_options: &ModelOptions, device: &Device) -> Self {
-        let (model_family, model_size) = match model_options {
-            ModelOptions::Qwen3(size) => {
-                let size_str = match size {
-                    Qwen3Size::Size0_6B => "0_6B",
-                    Qwen3Size::Size1_7B => "1_7B",
-                    Qwen3Size::Size4B => "4B",
-                    Qwen3Size::Size8B => "8B",
-                    Qwen3Size::Size14B => "14B",
-                    Qwen3Size::Size32B => "32B",
-                };
-                ("Qwen3".to_string(), size_str.to_string())
-            }
-            ModelOptions::Gemma3(size) => {
-                let size_str = match size {
-                    Gemma3Size::Size1B => "1B",
-                    Gemma3Size::Size4B => "4B",
-                    Gemma3Size::Size12B => "12B",
-                    Gemma3Size::Size27B => "27B",
-                };
-                ("Gemma3".to_string(), size_str.to_string())
-            }
-            ModelOptions::Phi4(size) => {
-                let size_str = match size {
-                    Phi4Size::Size14B => "14B",
-                };
-                ("Phi4".to_string(), size_str.to_string())
-            }
-        };
+    /// Create a new cache key from model path and device
+    pub fn new(model_path: &str, device: &Device) -> Result<Self> {
+        let mut hasher = DefaultHasher::new();
+        model_path.hash(&mut hasher);
+        let model_hash = hasher.finish();
 
         let (device_type, device_id) = match device {
             Device::Cpu => ("CPU".to_string(), None),
-            Device::Cuda(cuda_device) => ("CUDA".to_string(), Some(0)), // Simplified for now
-            Device::Metal(_metal_device) => ("Metal".to_string(), Some(0)), // Simplified for now
+            Device::Cuda(_cuda_device) => {
+                // TODO: Fix device indexing for multi-GPU setups
+                // Currently hard-coded to 0 because candle_core::Device doesn't expose
+                // the actual device index via a public API. This can cause incorrect
+                // cache key mapping in multi-GPU setups where different devices should
+                // have separate cache entries.
+                ("CUDA".to_string(), Some(0))
+            }
+            Device::Metal(_metal_device) => {
+                // TODO: Fix device indexing for multi-MPS setups
+                // Currently hard-coded to 0 because candle_core::Device doesn't expose
+                // the actual device index via a public API. This can cause incorrect
+                // cache key mapping in multi-MPS setups where different devices should
+                // have separate cache entries.
+                ("Metal".to_string(), Some(0))
+            }
         };
 
-        Self {
-            model_family,
-            model_size,
+        Ok(Self {
+            model_path: model_path.to_string(),
             device_type,
             device_id,
-        }
+            model_hash,
+        })
     }
-}
-
-/// Container for shared model data that can be shared across multiple pipelines
-pub trait SharedModelData: Send + Sync {}
-
-/// Global cache for model instances
-pub struct ModelCache {
-    cache: Mutex<HashMap<ModelCacheKey, Box<dyn CacheEntry>>>,
-}
-
-impl ModelCache {
-    fn new() -> Self {
-        Self {
-            cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Get or load a model from the cache
-    pub fn get_or_load<T, F>(&self, key: ModelCacheKey, loader: F) -> anyhow::Result<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-        F: FnOnce() -> anyhow::Result<T>,
-    {
-        let mut cache = self.cache.lock().unwrap();
-
-        // Check if we have a cached weak reference
-        if let Some(cache_entry) = cache.get(&key) {
-            // Try to downcast to Weak<T>
-            if let Some(weak_ref) = cache_entry.as_any().downcast_ref::<Weak<T>>() {
-                // Try to upgrade the weak reference
-                if let Some(strong_ref) = weak_ref.upgrade() {
-                    // Model is still alive, return it
-                    return Ok(strong_ref);
-                }
-            }
-            // Either wrong type or dead reference, remove it
-            cache.remove(&key);
-        }
-
-        // Cache miss or dead reference, load new model
-        drop(cache); // Release lock while loading
-        let model_data = loader()?;
-        let arc_data = Arc::new(model_data);
-
-        // Store weak reference in cache
-        let weak_ref = Arc::downgrade(&arc_data);
-        let mut cache = self.cache.lock().unwrap();
-        cache.insert(key, Box::new(weak_ref));
-
-        Ok(arc_data)
-    }
-
-    /// Clear all cached models (useful for testing or memory management)
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.clear();
-    }
-
-    /// Remove dead weak references from the cache
-    pub fn cleanup_dead_references(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.retain(|_, cache_entry| {
-            // Check if the weak reference is still alive
-            cache_entry.is_alive()
-        });
-    }
-}
-
-// Global singleton instance
-static GLOBAL_CACHE: std::sync::OnceLock<ModelCache> = std::sync::OnceLock::new();
-
-/// Get the global model cache instance
-pub fn get_global_cache() -> &'static ModelCache {
-    GLOBAL_CACHE.get_or_init(|| ModelCache::new())
 }

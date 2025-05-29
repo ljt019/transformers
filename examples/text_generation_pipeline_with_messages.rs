@@ -6,7 +6,7 @@ fn main() -> Result<()> {
     println!("Building pipeline...");
 
     // 1. Create the pipeline, using the builder to configure the model
-    let pipeline = TextGenerationPipelineBuilder::new(ModelOptions::Phi4(Phi4Size::Size14B))
+    let pipeline = TextGenerationPipelineBuilder::new(ModelOptions::Qwen3(Qwen3Size::Size1_7B))
         .temperature(0.7)
         .build()?;
     println!("Pipeline built successfully.");

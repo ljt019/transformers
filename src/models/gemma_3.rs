@@ -6,31 +6,31 @@ use crate::utils::gguf_cache::create_model_weights_from_cache;
 use crate::utils::loaders::{HfLoader, TokenizerLoader};
 use crate::utils::model_cache::ModelCacheKey;
 use minijinja::{context, Environment};
+use parking_lot::RwLock;
 use serde_json::Value;
-use std::cell::RefCell;
+use std::sync::Arc;
 
 use super::generate_tokens_from_prompt;
 use crate::Message;
 
-#[derive(Clone)]
-pub enum Gemma3Size {
-    Size1B,
-    Size4B,
-    Size12B,
-    Size27B,
-}
+// Use the canonical Gemma3Size from the pipeline module
+pub use crate::pipelines::text_generation_pipeline::Gemma3Size;
 
 pub struct QuantizedGemma3Model {
-    pipeline_state: RefCell<quantized_gemma3::PipelineState>,
+    pipeline_state: Arc<RwLock<quantized_gemma3::PipelineState>>,
     config: ModelConfig,
 }
 
 impl QuantizedGemma3Model {
     pub fn new(config: ModelConfig, size: Gemma3Size) -> anyhow::Result<Self> {
-        // Create cache key for this model configuration
-        let model_option =
-            crate::pipelines::text_generation_pipeline::ModelOptions::Gemma3(size.clone());
-        let cache_key = ModelCacheKey::new(&model_option, &config.device);
+        // Create cache key for this model configuration using a string identifier
+        let model_identifier = match size {
+            Gemma3Size::Size1B => "unsloth/gemma-3-1b-it-GGUF/gemma-3-1b-it-Q4_K_M.gguf",
+            Gemma3Size::Size4B => "unsloth/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_K_M.gguf",
+            Gemma3Size::Size12B => "unsloth/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q4_K_M.gguf",
+            Gemma3Size::Size27B => "unsloth/gemma-3-27b-it-GGUF/gemma-3-27b-it-Q4_K_M.gguf",
+        };
+        let cache_key = ModelCacheKey::new(model_identifier, &config.device)?;
 
         // Get shared weights or load new ones
         let shared_cache = get_global_shared_model_cache();
@@ -40,10 +40,10 @@ impl QuantizedGemma3Model {
 
         // Create pipeline state with shared weights and individual KV caches
         let pipeline_state = quantized_gemma3::PipelineState::new(shared_weights);
-        let pipeline_state_refcell = RefCell::new(pipeline_state);
+        let pipeline_state_arc = Arc::new(RwLock::new(pipeline_state));
 
         Ok(Self {
-            pipeline_state: pipeline_state_refcell,
+            pipeline_state: pipeline_state_arc,
             config,
         })
     }
@@ -134,12 +134,12 @@ impl TextGenerationModel for QuantizedGemma3Model {
         max_len: usize,
         eos_token: u32,
     ) -> anyhow::Result<Vec<u32>> {
-        let mut specific_weights_ref_mut = self.pipeline_state.borrow_mut();
+        let mut pipeline_state_guard = self.pipeline_state.write();
 
         let response_tokens = generate_tokens_from_prompt(
             prompt_tokens,
             &self.config.params,
-            &mut *specific_weights_ref_mut,
+            &mut *pipeline_state_guard,
             max_len,
             &self.config.device,
             eos_token,

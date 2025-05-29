@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     let response_9 = pipeline_9.prompt_completion(prompt, 10)?;
     println!("Response 9: {}", response_9);
 
-    let response_10 = pipeline_10.prompt_completion(prompt, 10000)?;
+    let response_10 = pipeline_10.prompt_completion(prompt, 100)?;
     println!("Response 10: {}", response_10);
 
     Ok(())

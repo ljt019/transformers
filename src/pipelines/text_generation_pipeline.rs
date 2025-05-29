@@ -3,16 +3,35 @@ use crate::models::phi_4::QuantizedPhi4Model;
 use crate::models::qwen_3::QuantizedQwen3Model;
 use crate::utils::configs::ModelConfig;
 
-pub use crate::models::gemma_3::Gemma3Size;
-pub use crate::models::phi_4::Phi4Size;
-pub use crate::models::qwen_3::Qwen3Size;
-
 use crate::models::raw::generation::GenerationParams;
 use tokenizers::Tokenizer;
 
 use super::TextGenerationModel;
 
 use crate::Message;
+
+#[derive(Clone)]
+pub enum Qwen3Size {
+    Size0_6B,
+    Size1_7B,
+    Size4B,
+    Size8B,
+    Size14B,
+    Size32B,
+}
+
+#[derive(Clone)]
+pub enum Gemma3Size {
+    Size1B,
+    Size4B,
+    Size12B,
+    Size27B,
+}
+
+#[derive(Clone)]
+pub enum Phi4Size {
+    Size14B,
+}
 
 /// High-level selection of model family/architecture.
 ///
@@ -168,7 +187,7 @@ impl TextGenerationPipeline {
 
         // Generate the response with the prompt tokens
         let response_as_tokens = self.model.prompt_with_tokens(
-            &prompt_tokens.get_ids(),
+            prompt_tokens.get_ids(),
             max_length,
             self.eos_token_id,
         )?;
@@ -198,7 +217,7 @@ impl TextGenerationPipeline {
 
         // Generate the response with the prompt tokens
         let response_as_tokens = self.model.prompt_with_tokens(
-            &prompt_tokens.get_ids(),
+            prompt_tokens.get_ids(),
             max_length,
             self.eos_token_id,
         )?;
