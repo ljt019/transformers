@@ -17,6 +17,7 @@
 use candle_core::quantized::{gguf_file, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Embedding, Module};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::super::quantized_nn::RmsNorm;
@@ -27,6 +28,59 @@ pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
 pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR: f32 = 1.;
+
+/// Mask cache key for efficient caching
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct MaskCacheKey {
+    seq_len: usize,
+    index_pos: usize,
+    sliding_window_size: Option<usize>,
+}
+
+/// Cached mask entry
+#[derive(Debug, Clone)]
+struct CachedMask {
+    mask: Tensor,
+    dtype: DType,
+}
+
+impl CachedMask {
+    fn get_mask(&self, target_dtype: DType, b_sz: usize) -> Result<Tensor> {
+        let mask = if self.dtype != target_dtype {
+            self.mask.to_dtype(target_dtype)?
+        } else {
+            self.mask.clone()
+        };
+
+        // Expand to batch size if needed
+        if mask.dims()[0] != b_sz {
+            // Check tensor dimensions to handle different mask shapes robustly
+            let mask_dims = mask.dims();
+            match mask_dims.len() {
+                4 => {
+                    // Standard 4D mask: (batch, heads, seq_len, total_len)
+                    mask.expand((b_sz, mask_dims[1], mask_dims[2], mask_dims[3]))
+                }
+                3 => {
+                    // 3D mask: (batch, seq_len, total_len) - add head dimension
+                    let expanded = mask.expand((b_sz, mask_dims[1], mask_dims[2]))?;
+                    expanded.unsqueeze(1) // Add head dimension
+                }
+                2 => {
+                    // 2D mask: (seq_len, total_len) - add batch and head dimensions
+                    let expanded = mask.expand((b_sz, mask_dims[0], mask_dims[1]))?;
+                    expanded.unsqueeze(1) // Add head dimension
+                }
+                _ => candle_core::bail!(
+                    "Unsupported mask tensor shape: {:?}. Expected 2D, 3D, or 4D tensor.",
+                    mask_dims
+                ),
+            }
+        } else {
+            Ok(mask)
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct QMatMul {
@@ -140,51 +194,203 @@ pub struct LayerWeightsNoCache {
 }
 
 impl LayerWeightsNoCache {
-    fn mask(
+    /// Create causal mask using appropriate strategy based on sequence size
+    fn create_mask(
         &self,
-        b_sz: usize,
         seq_len: usize,
         index_pos: usize,
-        dtype: DType,
+        sliding_window_size: Option<usize>,
         device: &Device,
     ) -> Result<Tensor> {
-        // Create causal mask using efficient tensor operations instead of large Vec
-        let total_len = seq_len + index_pos;
+        // Choose strategy based on sequence size
+        if seq_len <= 64 || seq_len + index_pos <= 128 {
+            self.create_mask_direct(seq_len, index_pos, sliding_window_size, device)
+        } else {
+            self.create_mask_efficient(seq_len, index_pos, sliding_window_size, device)
+        }
+    }
 
-        // Create row and column indices tensors directly as F32
-        let row_indices = Tensor::arange(0f32, seq_len as f32, device)?
-            .unsqueeze(1)?
-            .broadcast_as(&[seq_len, total_len])?;
-        let col_indices = Tensor::arange(0f32, total_len as f32, device)?
-            .unsqueeze(0)?
-            .broadcast_as(&[seq_len, total_len])?;
+    /// Create memory-efficient causal mask using smaller tensors and broadcasting
+    fn create_mask_efficient(
+        &self,
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        device: &Device,
+    ) -> Result<Tensor> {
+        // Create a smaller (seq_len, seq_len) causal mask first using broadcasting
+        let causal_mask = if seq_len > 1 {
+            // Create row indices (i): [0, 1, 2, ...] expanded to (seq_len, 1)
+            let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+            // Create column indices (j): [0, 1, 2, ...] expanded to (1, seq_len)
+            let col_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(0)?;
 
-        // Create index_pos tensor for addition
-        let index_pos_tensor =
-            Tensor::new(index_pos as f32, device)?.broadcast_as(&[seq_len, total_len])?;
+            // Causal condition: j > i (upper triangular)
+            let causal_condition = col_indices.broadcast_gt(&row_indices)?;
 
-        // Create causal mask: mask[i,j] = NEG_INF if j > i + index_pos, else 0
-        let causal_condition = col_indices.gt(&(row_indices.clone() + index_pos_tensor.clone())?)?;
-        let mut mask = causal_condition.where_cond(
-            &Tensor::new(f32::NEG_INFINITY, device)?.broadcast_as(&[seq_len, total_len])?,
-            &Tensor::zeros(&[seq_len, total_len], DType::F32, device)?,
-        )?;
+            // Convert boolean to mask: true -> NEG_INF, false -> 0
+            let neg_inf_tensor = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+            let zeros_tensor = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
+            causal_condition.where_cond(&neg_inf_tensor, &zeros_tensor)?
+        } else {
+            Tensor::zeros((seq_len, seq_len), DType::F32, device)?
+        };
+
+        // If no cache context, just expand the square mask
+        if index_pos == 0 {
+            let mut final_mask = causal_mask;
+
+            // Apply sliding window if needed
+            if let Some(window_size) = sliding_window_size {
+                // Use broadcasting for sliding window mask: i > j + window_size
+                let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+                let col_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(0)?;
+                let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+
+                // Sliding window condition: i > j + window_size
+                let sliding_condition =
+                    row_indices.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+
+                let window_neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+                let window_zeros = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
+                let window_mask = sliding_condition.where_cond(&window_neg_inf, &window_zeros)?;
+                final_mask = final_mask.maximum(&window_mask)?;
+            }
+
+            return final_mask.unsqueeze(0)?.unsqueeze(0); // Add batch and head dims
+        }
+
+        // For cached context, create the full mask efficiently
+        // Left part: all zeros (can attend to cached context)
+        let left_part = Tensor::zeros((seq_len, index_pos), DType::F32, device)?;
+
+        // Right part: causal mask for new tokens
+        let right_part = causal_mask;
+
+        // Concatenate along the last dimension
+        let mut final_mask = Tensor::cat(&[&left_part, &right_part], 1)?;
 
         // Apply sliding window if needed
-        if let Some(window_size) = self.sliding_window_size {
-            // Create sliding window mask: mask[i,j] = NEG_INF if (j + window_size) < (i + index_pos)
-            let window_size_tensor =
-                Tensor::new(window_size as f32, device)?.broadcast_as(&[seq_len, total_len])?;
+        if let Some(window_size) = sliding_window_size {
+            // Use broadcasting for sliding window mask with cached context
+            let total_len = seq_len + index_pos;
+            let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+            let col_indices = Tensor::arange(0f32, total_len as f32, device)?.unsqueeze(0)?;
+            let index_pos_tensor = if index_pos == 0 {
+                Tensor::zeros((1, 1), DType::F32, device)?
+            } else {
+                Tensor::new(&[[index_pos as f32]], device)?
+            };
+            let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+
+            // Sliding window condition: (i + index_pos) > (j + window_size)
+            let current_pos = row_indices.broadcast_add(&index_pos_tensor)?;
             let sliding_condition =
-                (col_indices + window_size_tensor)?.lt(&(row_indices + index_pos_tensor)?)?;
-            let sliding_mask = sliding_condition.where_cond(
-                &Tensor::new(f32::NEG_INFINITY, device)?.broadcast_as(&[seq_len, total_len])?,
-                &Tensor::zeros(&[seq_len, total_len], DType::F32, device)?,
-            )?;
+                current_pos.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+
+            let sliding_total_neg_inf =
+                Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+            let sliding_total_zeros = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+            let window_mask =
+                sliding_condition.where_cond(&sliding_total_neg_inf, &sliding_total_zeros)?;
+            final_mask = final_mask.maximum(&window_mask)?;
+        }
+
+        final_mask.unsqueeze(0)?.unsqueeze(0) // Add batch and head dims
+    }
+
+    /// Fallback direct method for small sequences using broadcasting
+    fn create_mask_direct(
+        &self,
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let total_len = seq_len + index_pos;
+
+        // Create index tensors for broadcasting
+        let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+        let col_indices = Tensor::arange(0f32, total_len as f32, device)?.unsqueeze(0)?;
+        // Create index_pos_tensor as a (1,1) tensor for broadcasting
+        let index_pos_tensor = if index_pos == 0 {
+            Tensor::zeros((1, 1), DType::F32, device)?
+        } else {
+            Tensor::new(&[[index_pos as f32]], device)?
+        };
+        // Start with zeros
+        let mut mask = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+
+        // Causal mask: j > (i + index_pos)
+        let current_pos = row_indices.clone().broadcast_add(&index_pos_tensor)?;
+        let causal_condition = col_indices.broadcast_gt(&current_pos)?;
+        let neg_inf_tensor = Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+        mask = causal_condition.where_cond(&neg_inf_tensor, &mask)?;
+
+        // Sliding window mask if enabled
+        if let Some(window_size) = sliding_window_size {
+            let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+            // Sliding window condition: (i + index_pos) > (j + window_size)
+            let sliding_condition =
+                current_pos.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+            let sliding_neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+            let sliding_zeros = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+            let sliding_mask = sliding_condition.where_cond(&sliding_neg_inf, &sliding_zeros)?;
             mask = mask.maximum(&sliding_mask)?;
         }
 
-        mask.expand((b_sz, 1, seq_len, total_len))?.to_dtype(dtype)
+        mask.unsqueeze(0)?.unsqueeze(0) // Add batch and head dims
+    }
+
+    /// Get or create mask with caching
+    fn get_cached_mask(
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        mask_cache: &mut HashMap<MaskCacheKey, CachedMask>,
+        layer: &LayerWeightsNoCache,
+        device: &Device,
+        target_dtype: DType,
+        b_sz: usize,
+    ) -> Result<Tensor> {
+        // Clear mask cache when starting a new sequence to prevent unbounded memory growth
+        if index_pos == 0 {
+            mask_cache.clear();
+        }
+
+        let cache_key = MaskCacheKey {
+            seq_len,
+            index_pos,
+            sliding_window_size,
+        };
+
+        // Check if mask is in cache
+        if let Some(cached) = mask_cache.get(&cache_key) {
+            return cached.get_mask(target_dtype, b_sz);
+        }
+
+        // Create new mask
+        let mask = layer.create_mask(seq_len, index_pos, sliding_window_size, device)?;
+
+        // Cache the mask (store as F32 to avoid dtype conversions in cache)
+        let cached_mask = CachedMask {
+            mask: mask.clone(),
+            dtype: DType::F32,
+        };
+        mask_cache.insert(cache_key, cached_mask);
+
+        // Return mask in correct dtype and batch size
+        let mask = if DType::F32 != target_dtype {
+            mask.to_dtype(target_dtype)?
+        } else {
+            mask
+        };
+
+        if mask.dims()[0] != b_sz {
+            mask.expand((b_sz, mask.dim(1)?, mask.dim(2)?, mask.dim(3)?))
+        } else {
+            Ok(mask)
+        }
     }
 
     fn forward_attn(
@@ -433,6 +639,7 @@ impl Weights {
 pub struct PipelineState {
     pub weights: Arc<Weights>,
     pub kv_caches: Vec<KvCache>,
+    pub mask_cache: HashMap<MaskCacheKey, CachedMask>,
 }
 
 impl PipelineState {
@@ -446,6 +653,7 @@ impl PipelineState {
         Self {
             weights: shared_weights,
             kv_caches,
+            mask_cache: HashMap::new(),
         }
     }
 
@@ -458,11 +666,75 @@ impl PipelineState {
         Self {
             weights: shared_weights,
             kv_caches,
+            mask_cache: HashMap::new(),
         }
+    }
+
+    /// Pre-compute masks for all unique sliding window configurations in this model
+    /// This avoids redundant mask computation during the forward pass
+    fn precompute_masks_for_forward(
+        &mut self,
+        seq_len: usize,
+        index_pos: usize,
+        device: &Device,
+        dtype: DType,
+        b_sz: usize,
+    ) -> Result<Vec<(Option<usize>, Tensor)>> {
+        // Collect all unique sliding window configurations
+        let mut unique_configs = HashSet::new();
+        for layer in &self.weights.layers {
+            unique_configs.insert(layer.sliding_window_size);
+        }
+
+        // Compute mask for each unique configuration
+        let mut masks = Vec::new();
+        for config in unique_configs {
+            // Find a layer that matches this sliding window configuration
+            let template_layer = self
+                .weights
+                .layers
+                .iter()
+                .find(|layer| layer.sliding_window_size == config)
+                .unwrap_or(&self.weights.layers[0]); // Fallback to first layer if no match
+
+            let mask = LayerWeightsNoCache::get_cached_mask(
+                seq_len,
+                index_pos,
+                config,
+                &mut self.mask_cache,
+                template_layer,
+                device,
+                dtype,
+                b_sz,
+            )?;
+            masks.push((config, mask));
+        }
+
+        Ok(masks)
     }
 
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len) = x.dims2()?;
+
+        // Clear KV caches when processing conversation history (index_pos = 0)
+        // This ensures clean state when the user provides full conversation context
+        if index_pos == 0 {
+            // Clear all KV caches to ensure clean state
+            for kv_cache in &mut self.kv_caches {
+                kv_cache.reset();
+            }
+            // Clear mask cache as well
+            self.mask_cache.clear();
+        }
+
+        // Pre-compute masks for all unique sliding window configurations to avoid redundant work
+        let masks = if seq_len == 1 {
+            Vec::new() // No masks needed for single token
+        } else {
+            // Use F32 dtype for masks to match attention scores, not input token dtype
+            self.precompute_masks_for_forward(seq_len, index_pos, x.device(), DType::F32, b_sz)?
+        };
+
         let _enter = self.weights.span.enter();
 
         let mut layer_in = self.weights.tok_embeddings.forward(x)?;
@@ -472,13 +744,11 @@ impl PipelineState {
             let attention_mask = if seq_len == 1 {
                 None
             } else {
-                Some(layer.mask(
-                    b_sz,
-                    seq_len,
-                    index_pos,
-                    layer_in.dtype(),
-                    layer_in.device(),
-                )?)
+                // Find the pre-computed mask for this layer's configuration
+                masks
+                    .iter()
+                    .find(|(config, _)| *config == layer.sliding_window_size)
+                    .map(|(_, mask)| mask.clone())
             };
 
             // Attention block
