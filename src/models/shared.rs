@@ -37,10 +37,6 @@ impl SharedModelCache {
             if let Some(weak_ref) = cache_guard.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Model is still alive, return it
-                    println!(
-                        "Using cached {} weights - shared across pipelines!",
-                        model_name
-                    );
                     return Ok(strong_ref);
                 }
                 // Dead reference, remove it
@@ -49,7 +45,6 @@ impl SharedModelCache {
         }
 
         // Cache miss or dead reference, load new model outside the lock
-        println!("Loading new {} weights into cache...", model_name);
         let weights = loader()?;
         let arc_weights = Arc::new(weights);
 
@@ -60,7 +55,6 @@ impl SharedModelCache {
             if let Some(weak_ref) = cache_guard.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Another thread loaded it, use their version
-                    println!("Using {} weights loaded by another thread!", model_name);
                     return Ok(strong_ref);
                 }
                 // Dead reference, remove it

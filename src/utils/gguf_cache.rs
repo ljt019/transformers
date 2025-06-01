@@ -50,7 +50,6 @@ impl GgufCache {
         }
 
         // Cache miss or dead reference, load new GGUF data outside the lock
-        println!("Loading GGUF file: {}/{}", repo, filename);
         let gguf_loader = GgufModelLoader::new(repo, filename);
         let (mut gguf_file, _) = gguf_loader.load()?;
 
@@ -69,10 +68,6 @@ impl GgufCache {
             if let Some(weak_ref) = cache.get(&key) {
                 if let Some(strong_ref) = weak_ref.upgrade() {
                     // Another thread loaded it, use their version
-                    println!(
-                        "Using GGUF data loaded by another thread: {}/{}",
-                        repo, filename
-                    );
                     return Ok(strong_ref);
                 }
                 // Dead reference, remove it
