@@ -1,4 +1,4 @@
-# transformers v0.0.7
+# transformers v0.0.8
 
 <!-- CI / Workflow Badges -->
 [<img alt="crates.io" src="https://img.shields.io/crates/v/transformers.svg?style=for-the-badge&color=fc8d62&logo=rust" height="19">](https://crates.io/crates/transformers)
@@ -9,6 +9,10 @@
 > ***This crate is under active development. APIs may change as features are still being added, and things tweaked.***
 
 Transformers provides a simple, intuitive interface for Rust developers who want to work with Large Language Models locally, powered by the [Candle](https://github.com/huggingface/candle) crate. It offers an API inspired by Python's [Transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
+
+## Performance Optimizations
+
+**Model Weight Caching**: When creating multiple pipelines with the same model and size, the crate automatically caches and reuses the model weights in memory. This means that subsequent pipeline creation is significantly faster, as only new KV caches are allocated for each pipeline instance, while the expensive model weights are shared. This is particularly beneficial for applications that need multiple instances of the same model for parallel processing or different configurations.
 
 ## Supported Models & Pipelines
 
@@ -220,6 +224,8 @@ fn main() -> Result<()> {
 - Add more model families and sizes
 - Support additional pipelines (summarization, classification)
 - Improve performance and error handling
+- CUDA support for faster inference
+- Direct model interface (beyond pipelines)
 
 ## Credits
 
