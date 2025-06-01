@@ -14,18 +14,73 @@
 //! - [Gemma 3 Models](https://blog.google/technology/developers/gemma-3/)
 //!
 
-use super::super::quantized_nn::RmsNorm;
-use candle_core::quantized::gguf_file;
-use candle_core::quantized::QTensor;
-use candle_core::D;
+use candle_core::quantized::{gguf_file, QTensor};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::{kv_cache::KvCache, Embedding, Module};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use super::super::quantized_nn::RmsNorm;
+use crate::models::ModelWeightForward;
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
 pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR: f32 = 1.;
+
+/// Mask cache key for efficient caching
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct MaskCacheKey {
+    seq_len: usize,
+    index_pos: usize,
+    sliding_window_size: Option<usize>,
+}
+
+/// Cached mask entry
+#[derive(Debug, Clone)]
+struct CachedMask {
+    mask: Tensor,
+    dtype: DType,
+}
+
+impl CachedMask {
+    fn get_mask(&self, target_dtype: DType, b_sz: usize) -> Result<Tensor> {
+        let mask = if self.dtype != target_dtype {
+            self.mask.to_dtype(target_dtype)?
+        } else {
+            self.mask.clone()
+        };
+
+        // Expand to batch size if needed
+        if mask.dims()[0] != b_sz {
+            // Check tensor dimensions to handle different mask shapes robustly
+            let mask_dims = mask.dims();
+            match mask_dims.len() {
+                4 => {
+                    // Standard 4D mask: (batch, heads, seq_len, total_len)
+                    mask.expand((b_sz, mask_dims[1], mask_dims[2], mask_dims[3]))
+                }
+                3 => {
+                    // 3D mask: (batch, seq_len, total_len) - add head dimension
+                    let expanded = mask.expand((b_sz, mask_dims[1], mask_dims[2]))?;
+                    expanded.unsqueeze(1) // Add head dimension
+                }
+                2 => {
+                    // 2D mask: (seq_len, total_len) - add batch and head dimensions
+                    let expanded = mask.expand((b_sz, mask_dims[0], mask_dims[1]))?;
+                    expanded.unsqueeze(1) // Add head dimension
+                }
+                _ => candle_core::bail!(
+                    "Unsupported mask tensor shape: {:?}. Expected 2D, 3D, or 4D tensor.",
+                    mask_dims
+                ),
+            }
+        } else {
+            Ok(mask)
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct QMatMul {
@@ -76,8 +131,7 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / rope_frequency.powf(i as f32 / head_dim as f32))
             .collect();
         let theta = Tensor::new(theta.as_slice(), device)?;
-        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
-            .to_dtype(DType::F32)?
+        let idx_theta = Tensor::arange(0f32, MAX_SEQ_LEN as f32, device)?
             .reshape((MAX_SEQ_LEN, 1))?
             .matmul(&theta.reshape((1, theta.elem_count()))?)?;
         let cos = idx_theta.cos()?;
@@ -100,88 +154,251 @@ impl RotaryEmbedding {
     }
 }
 
+// New efficient architecture - shared weights with per-pipeline KV caches
+
+/// Layer weights without KV cache (shareable)
 #[derive(Debug, Clone)]
-struct LayerWeights {
+pub struct LayerWeightsNoCache {
     // Attention components
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_wo: QMatMul,
+    pub attention_wq: QMatMul,
+    pub attention_wk: QMatMul,
+    pub attention_wv: QMatMul,
+    pub attention_wo: QMatMul,
 
     // Specialized normalization for Q and K
-    attention_q_norm: RmsNorm,
-    attention_k_norm: RmsNorm,
+    pub attention_q_norm: RmsNorm,
+    pub attention_k_norm: RmsNorm,
 
     // Layer normalization
-    attention_norm: RmsNorm,      // Applied before attention
-    post_attention_norm: RmsNorm, // Applied after attention
-    ffn_norm: RmsNorm,            // Applied before feedforward
-    post_ffn_norm: RmsNorm,       // Applied after feedforward
+    pub attention_norm: RmsNorm,      // Applied before attention
+    pub post_attention_norm: RmsNorm, // Applied after attention
+    pub ffn_norm: RmsNorm,            // Applied before feedforward
+    pub post_ffn_norm: RmsNorm,       // Applied after feedforward
 
     // Feed-forward network
-    mlp: Mlp,
+    pub mlp: Mlp,
 
     // Attention parameters
-    n_head: usize,    // Number of query heads
-    n_kv_head: usize, // Number of key-value heads
-    head_dim: usize,  // Dimension of each head
-    q_dim: usize,     // Total dimension for queries
+    pub n_head: usize,    // Number of query heads
+    pub n_kv_head: usize, // Number of key-value heads
+    pub head_dim: usize,  // Dimension of each head
+    pub q_dim: usize,     // Total dimension for queries
 
-    sliding_window_size: Option<usize>,
-
-    rotary_embedding: RotaryEmbedding,
-    neg_inf: Tensor,
-
-    // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    pub sliding_window_size: Option<usize>,
+    pub rotary_embedding: RotaryEmbedding,
+    pub neg_inf: Tensor,
 
     // Tracing
-    span_attn: tracing::Span,
-    span_mlp: tracing::Span,
+    pub span_attn: tracing::Span,
+    pub span_mlp: tracing::Span,
 }
 
-impl LayerWeights {
-    fn mask(
+impl LayerWeightsNoCache {
+    /// Create causal mask using appropriate strategy based on sequence size
+    fn create_mask(
         &self,
-        b_sz: usize,
         seq_len: usize,
         index_pos: usize,
-        dtype: DType,
+        sliding_window_size: Option<usize>,
         device: &Device,
     ) -> Result<Tensor> {
-        let mask: Vec<_> = if let Some(sliding_window_size) = self.sliding_window_size {
-            (0..seq_len)
-                .flat_map(|i| {
-                    (0..seq_len).map(move |j| {
-                        if i < j || j + sliding_window_size < i {
-                            0u32
-                        } else {
-                            1u32
-                        }
-                    })
-                })
-                .collect()
+        // Choose strategy based on sequence size
+        if seq_len <= 64 || seq_len + index_pos <= 128 {
+            self.create_mask_direct(seq_len, index_pos, sliding_window_size, device)
         } else {
-            (0..seq_len)
-                .flat_map(|i| (0..seq_len).map(move |j| if i < j { 0u32 } else { 1u32 }))
-                .collect()
+            self.create_mask_efficient(seq_len, index_pos, sliding_window_size, device)
+        }
+    }
+
+    /// Create memory-efficient causal mask using smaller tensors and broadcasting
+    fn create_mask_efficient(
+        &self,
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        device: &Device,
+    ) -> Result<Tensor> {
+        // Create a smaller (seq_len, seq_len) causal mask first using broadcasting
+        let causal_mask = if seq_len > 1 {
+            // Create row indices (i): [0, 1, 2, ...] expanded to (seq_len, 1)
+            let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+            // Create column indices (j): [0, 1, 2, ...] expanded to (1, seq_len)
+            let col_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(0)?;
+
+            // Causal condition: j > i (upper triangular)
+            let causal_condition = col_indices.broadcast_gt(&row_indices)?;
+
+            // Convert boolean to mask: true -> NEG_INF, false -> 0
+            let neg_inf_tensor = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+            let zeros_tensor = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
+            causal_condition.where_cond(&neg_inf_tensor, &zeros_tensor)?
+        } else {
+            Tensor::zeros((seq_len, seq_len), DType::F32, device)?
         };
-        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
-        let mask = if index_pos > 0 {
-            let mask0 = Tensor::zeros((seq_len, index_pos), DType::F32, device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+
+        // If no cache context, just expand the square mask
+        if index_pos == 0 {
+            let mut final_mask = causal_mask;
+
+            // Apply sliding window if needed
+            if let Some(window_size) = sliding_window_size {
+                // Use broadcasting for sliding window mask: i > j + window_size
+                let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+                let col_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(0)?;
+                let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+
+                // Sliding window condition: i > j + window_size
+                let sliding_condition =
+                    row_indices.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+
+                let window_neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+                let window_zeros = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
+                let window_mask = sliding_condition.where_cond(&window_neg_inf, &window_zeros)?;
+                final_mask = final_mask.maximum(&window_mask)?;
+            }
+
+            return final_mask.unsqueeze(0)?.unsqueeze(0); // Add batch and head dims
+        }
+
+        // For cached context, create the full mask efficiently
+        // Left part: all zeros (can attend to cached context)
+        let left_part = Tensor::zeros((seq_len, index_pos), DType::F32, device)?;
+
+        // Right part: causal mask for new tokens
+        let right_part = causal_mask;
+
+        // Concatenate along the last dimension
+        let mut final_mask = Tensor::cat(&[&left_part, &right_part], 1)?;
+
+        // Apply sliding window if needed
+        if let Some(window_size) = sliding_window_size {
+            // Use broadcasting for sliding window mask with cached context
+            let total_len = seq_len + index_pos;
+            let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+            let col_indices = Tensor::arange(0f32, total_len as f32, device)?.unsqueeze(0)?;
+            let index_pos_tensor = if index_pos == 0 {
+                Tensor::zeros((1, 1), DType::F32, device)?
+            } else {
+                Tensor::new(&[[index_pos as f32]], device)?
+            };
+            let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+
+            // Sliding window condition: (i + index_pos) > (j + window_size)
+            let current_pos = row_indices.broadcast_add(&index_pos_tensor)?;
+            let sliding_condition =
+                current_pos.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+
+            let sliding_total_neg_inf =
+                Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+            let sliding_total_zeros = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+            let window_mask =
+                sliding_condition.where_cond(&sliding_total_neg_inf, &sliding_total_zeros)?;
+            final_mask = final_mask.maximum(&window_mask)?;
+        }
+
+        final_mask.unsqueeze(0)?.unsqueeze(0) // Add batch and head dims
+    }
+
+    /// Fallback direct method for small sequences using broadcasting
+    fn create_mask_direct(
+        &self,
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let total_len = seq_len + index_pos;
+
+        // Create index tensors for broadcasting
+        let row_indices = Tensor::arange(0f32, seq_len as f32, device)?.unsqueeze(1)?;
+        let col_indices = Tensor::arange(0f32, total_len as f32, device)?.unsqueeze(0)?;
+        // Create index_pos_tensor as a (1,1) tensor for broadcasting
+        let index_pos_tensor = if index_pos == 0 {
+            Tensor::zeros((1, 1), DType::F32, device)?
+        } else {
+            Tensor::new(&[[index_pos as f32]], device)?
+        };
+        // Start with zeros
+        let mut mask = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+
+        // Causal mask: j > (i + index_pos)
+        let current_pos = row_indices.clone().broadcast_add(&index_pos_tensor)?;
+        let causal_condition = col_indices.broadcast_gt(&current_pos)?;
+        let neg_inf_tensor = Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+        mask = causal_condition.where_cond(&neg_inf_tensor, &mask)?;
+
+        // Sliding window mask if enabled
+        if let Some(window_size) = sliding_window_size {
+            let window_size_tensor = Tensor::new(&[[window_size as f32]], device)?;
+            // Sliding window condition: (i + index_pos) > (j + window_size)
+            let sliding_condition =
+                current_pos.broadcast_gt(&col_indices.broadcast_add(&window_size_tensor)?)?;
+            let sliding_neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), device)?;
+            let sliding_zeros = Tensor::zeros((seq_len, total_len), DType::F32, device)?;
+            let sliding_mask = sliding_condition.where_cond(&sliding_neg_inf, &sliding_zeros)?;
+            mask = mask.maximum(&sliding_mask)?;
+        }
+
+        mask.unsqueeze(0)?.unsqueeze(0) // Add batch and head dims
+    }
+
+    /// Get or create mask with caching
+    fn get_cached_mask(
+        seq_len: usize,
+        index_pos: usize,
+        sliding_window_size: Option<usize>,
+        mask_cache: &mut HashMap<MaskCacheKey, CachedMask>,
+        layer: &LayerWeightsNoCache,
+        device: &Device,
+        target_dtype: DType,
+        b_sz: usize,
+    ) -> Result<Tensor> {
+        // Clear mask cache when starting a new sequence to prevent unbounded memory growth
+        if index_pos == 0 {
+            mask_cache.clear();
+        }
+
+        let cache_key = MaskCacheKey {
+            seq_len,
+            index_pos,
+            sliding_window_size,
+        };
+
+        // Check if mask is in cache
+        if let Some(cached) = mask_cache.get(&cache_key) {
+            return cached.get_mask(target_dtype, b_sz);
+        }
+
+        // Create new mask
+        let mask = layer.create_mask(seq_len, index_pos, sliding_window_size, device)?;
+
+        // Cache the mask (store as F32 to avoid dtype conversions in cache)
+        let cached_mask = CachedMask {
+            mask: mask.clone(),
+            dtype: DType::F32,
+        };
+        mask_cache.insert(cache_key, cached_mask);
+
+        // Return mask in correct dtype and batch size
+        let mask = if DType::F32 != target_dtype {
+            mask.to_dtype(target_dtype)?
         } else {
             mask
         };
-        mask.expand((b_sz, 1, seq_len, seq_len + index_pos))?
-            .to_dtype(dtype)
+
+        if mask.dims()[0] != b_sz {
+            mask.expand((b_sz, mask.dim(1)?, mask.dim(2)?, mask.dim(3)?))
+        } else {
+            Ok(mask)
+        }
     }
 
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         index_pos: usize,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, _) = x.dims3()?;
@@ -190,74 +407,75 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let q = q.reshape((b_sz, seq_len, self.n_head, self.head_dim))?;
+        let k = k.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
+        let v = v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?;
 
-        let q = self.attention_q_norm.forward(&q.contiguous()?)?;
-        let k = self.attention_k_norm.forward(&k.contiguous()?)?;
+        // Apply normalization to Q and K
+        let q = q.transpose(1, 2)?.flatten(0, 2)?;
+        let k = k.transpose(1, 2)?.flatten(0, 2)?;
+        let q = self.attention_q_norm.forward(&q)?;
+        let k = self.attention_k_norm.forward(&k)?;
+        let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+        let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+        let v = v.transpose(1, 2)?;
 
+        // Apply rotary embedding
         let (q, k) = self
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
-
-        // Repeat KV for GQA
-        let k = super::super::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = super::super::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-        // Scaled Dot-Product Attention
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-
-        if let Some(mask) = mask {
-            let mask = mask.broadcast_as(attn_weights.shape())?;
-            let neg_inf = self.neg_inf.broadcast_as(attn_weights.dims())?;
-            attn_weights = mask.eq(0u32)?.where_cond(&neg_inf, &attn_weights)?;
+        // Update KV cache
+        if index_pos == 0 {
+            kv_cache.reset();
         }
+        let k_cont = k.contiguous()?;
+        let v_cont = v.contiguous()?;
+        let (k, v) = kv_cache.append(&k_cont, &v_cont)?;
 
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v)?;
+        // Expand KV to match query heads if needed (for GQA)
+        let k = if self.n_kv_head != self.n_head {
+            let repeat_count = self.n_head / self.n_kv_head;
+            super::super::utils::repeat_kv(k, repeat_count)?
+        } else {
+            k
+        };
+        let v = if self.n_kv_head != self.n_head {
+            let repeat_count = self.n_head / self.n_kv_head;
+            super::super::utils::repeat_kv(v, repeat_count)?
+        } else {
+            v
+        };
 
-        let attn_output = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, seq_len, self.q_dim))?;
+        // Attention computation
+        let scale = (self.head_dim as f64).powf(-0.5);
+        let scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+        let scores = match mask {
+            Some(mask) => scores.broadcast_add(mask)?,
+            None => scores,
+        };
+        let attn = candle_nn::ops::softmax_last_dim(&scores)?;
+        let out = attn.matmul(&v)?;
 
-        self.attention_wo.forward(&attn_output)
+        let out = out.transpose(1, 2)?.reshape((b_sz, seq_len, self.q_dim))?;
+        self.attention_wo.forward(&out)
     }
 }
 
+/// Shared model weights (immutable, shareable across pipelines)
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    tok_embeddings: Embedding,
-    embedding_length: usize,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    output: QMatMul,
-    span: tracing::Span,
-    span_output: tracing::Span,
+pub struct Weights {
+    pub tok_embeddings: Embedding,
+    pub embedding_length: usize,
+    pub layers: Vec<LayerWeightsNoCache>,
+    pub norm: RmsNorm,
+    pub output: QMatMul,
+    pub device: Device,
+    pub span: tracing::Span,
+    pub span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl Weights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
@@ -289,13 +507,7 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(DEFAULT_ROPE_FREQUENCY_SLIDING);
 
-        // Unused in Llama.cpp so we aren't using it here.
-        let _rope_freq_scaling_factor = md_get("gemma3.rope.scaling.factor")
-            .and_then(|m| m.to_f32())
-            .unwrap_or(DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR);
-
         // Compute the dimensions for queries, keys, and values
-        // These are the total dimensions when projected across all heads
         let q_dim = head_count * key_length;
 
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
@@ -383,7 +595,7 @@ impl ModelWeights {
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
 
-            layers.push(LayerWeights {
+            layers.push(LayerWeightsNoCache {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
@@ -402,7 +614,6 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
                 span_attn,
                 span_mlp,
             })
@@ -417,33 +628,138 @@ impl ModelWeights {
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
+            device: device.clone(),
             span,
             span_output,
         })
     }
 }
 
-use super::super::super::ModelWeightForward;
+/// Per-pipeline state that holds individual KV caches
+pub struct PipelineState {
+    pub weights: Arc<Weights>,
+    pub kv_caches: Vec<KvCache>,
+    pub mask_cache: HashMap<MaskCacheKey, CachedMask>,
+}
 
-impl ModelWeightForward for ModelWeights {
-    fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+impl PipelineState {
+    pub fn new(shared_weights: Arc<Weights>) -> Self {
+        let num_layers = shared_weights.layers.len();
+        let initial_cache_size = 64; // Small initial size, grows dynamically
+        let kv_caches: Vec<KvCache> = (0..num_layers)
+            .map(|_| KvCache::new(2, initial_cache_size))
+            .collect();
+
+        Self {
+            weights: shared_weights,
+            kv_caches,
+            mask_cache: HashMap::new(),
+        }
+    }
+
+    pub fn new_with_cache_size(shared_weights: Arc<Weights>, initial_cache_size: usize) -> Self {
+        let num_layers = shared_weights.layers.len();
+        let kv_caches: Vec<KvCache> = (0..num_layers)
+            .map(|_| KvCache::new(2, initial_cache_size))
+            .collect();
+
+        Self {
+            weights: shared_weights,
+            kv_caches,
+            mask_cache: HashMap::new(),
+        }
+    }
+
+    /// Pre-compute masks for all unique sliding window configurations in this model
+    /// This avoids redundant mask computation during the forward pass
+    fn precompute_masks_for_forward(
+        &mut self,
+        seq_len: usize,
+        index_pos: usize,
+        device: &Device,
+        dtype: DType,
+        b_sz: usize,
+    ) -> Result<Vec<(Option<usize>, Tensor)>> {
+        // Collect all unique sliding window configurations
+        let mut unique_configs = HashSet::new();
+        for layer in &self.weights.layers {
+            unique_configs.insert(layer.sliding_window_size);
+        }
+
+        // Compute mask for each unique configuration
+        let mut masks = Vec::new();
+        for config in unique_configs {
+            // Find a layer that matches this sliding window configuration
+            let template_layer = self
+                .weights
+                .layers
+                .iter()
+                .find(|layer| layer.sliding_window_size == config)
+                .unwrap_or(&self.weights.layers[0]); // Fallback to first layer if no match
+
+            let mask = LayerWeightsNoCache::get_cached_mask(
+                seq_len,
+                index_pos,
+                config,
+                &mut self.mask_cache,
+                template_layer,
+                device,
+                dtype,
+                b_sz,
+            )?;
+            masks.push((config, mask));
+        }
+
+        Ok(masks)
+    }
+
+    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len) = x.dims2()?;
-        let _enter = self.span.enter();
 
-        let mut layer_in = self.tok_embeddings.forward(x)?;
-        layer_in = (layer_in * (self.embedding_length as f64).sqrt())?;
+        // Clear KV caches when processing conversation history (index_pos = 0)
+        // This ensures clean state when the user provides full conversation context
+        if index_pos == 0 {
+            // Clear all KV caches to ensure clean state
+            for kv_cache in &mut self.kv_caches {
+                kv_cache.reset();
+            }
+            // Clear mask cache as well
+            self.mask_cache.clear();
+        }
 
-        for layer in self.layers.iter_mut() {
+        // Pre-compute masks for all unique sliding window configurations to avoid redundant work
+        let masks = if seq_len == 1 {
+            Vec::new() // No masks needed for single token
+        } else {
+            // Use F32 dtype for masks to match attention scores, not input token dtype
+            self.precompute_masks_for_forward(seq_len, index_pos, x.device(), DType::F32, b_sz)?
+        };
+
+        let _enter = self.weights.span.enter();
+
+        let mut layer_in = self.weights.tok_embeddings.forward(x)?;
+        layer_in = (layer_in * (self.weights.embedding_length as f64).sqrt())?;
+
+        for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
             let attention_mask = if seq_len == 1 {
                 None
             } else {
-                Some(layer.mask(b_sz, seq_len, index_pos, x.dtype(), x.device())?)
+                // Find the pre-computed mask for this layer's configuration
+                masks
+                    .iter()
+                    .find(|(config, _)| *config == layer.sliding_window_size)
+                    .map(|(_, mask)| mask.clone())
             };
 
             // Attention block
             let residual = &layer_in;
             let x = layer.attention_norm.forward(&layer_in)?;
-            let x = layer.forward_attn(&x, attention_mask.as_ref(), index_pos)?;
+            let x = layer.forward_attn(
+                &x,
+                attention_mask.as_ref(),
+                index_pos,
+                &mut self.kv_caches[layer_idx],
+            )?;
             let x = layer.post_attention_norm.forward(&x)?;
             let x = (x + residual)?;
 
@@ -459,12 +775,18 @@ impl ModelWeightForward for ModelWeights {
             layer_in = x;
         }
 
-        let _enter = self.span_output.enter();
+        let _enter = self.weights.span_output.enter();
 
         let x = layer_in.i((.., seq_len - 1, ..))?;
-        let x = self.norm.forward(&x)?;
-        let output = self.output.forward(&x)?;
+        let x = self.weights.norm.forward(&x)?;
+        let output = self.weights.output.forward(&x)?;
 
         Ok(output)
+    }
+}
+
+impl ModelWeightForward for PipelineState {
+    fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+        self.forward(x, index_pos)
     }
 }

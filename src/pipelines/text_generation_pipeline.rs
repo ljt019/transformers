@@ -3,16 +3,35 @@ use crate::models::phi_4::QuantizedPhi4Model;
 use crate::models::qwen_3::QuantizedQwen3Model;
 use crate::utils::configs::ModelConfig;
 
-pub use crate::models::gemma_3::Gemma3Size;
-pub use crate::models::phi_4::Phi4Size;
-pub use crate::models::qwen_3::Qwen3Size;
-
 use crate::models::raw::generation::GenerationParams;
 use tokenizers::Tokenizer;
 
 use super::TextGenerationModel;
 
 use crate::Message;
+
+#[derive(Clone)]
+pub enum Qwen3Size {
+    Size0_6B,
+    Size1_7B,
+    Size4B,
+    Size8B,
+    Size14B,
+    Size32B,
+}
+
+#[derive(Clone)]
+pub enum Gemma3Size {
+    Size1B,
+    Size4B,
+    Size12B,
+    Size27B,
+}
+
+#[derive(Clone)]
+pub enum Phi4Size {
+    Size14B,
+}
 
 /// High-level selection of model family/architecture.
 ///
@@ -161,16 +180,23 @@ impl TextGenerationPipeline {
         let formatted_prompt = self.model.format_prompt(prompt);
 
         // Turn the prompt into tokens
-        let prompt_tokens = self.tokenizer.encode(formatted_prompt, true).unwrap();
+        let prompt_tokens = self
+            .tokenizer
+            .encode(formatted_prompt, true)
+            .map_err(|e| anyhow::anyhow!("Failed to encode prompt: {}", e))?;
 
         // Generate the response with the prompt tokens
-        let response_as_tokens = self
-            .model
-            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
-            .unwrap();
+        let response_as_tokens = self.model.prompt_with_tokens(
+            prompt_tokens.get_ids(),
+            max_length,
+            self.eos_token_id,
+        )?;
 
         // Turn the response tokens back into a string
-        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+        let response = self
+            .tokenizer
+            .decode(&response_as_tokens, true)
+            .map_err(|e| anyhow::anyhow!("Failed to decode response tokens: {}", e))?;
 
         Ok(response)
     }
@@ -181,19 +207,26 @@ impl TextGenerationPipeline {
         max_length: usize,
     ) -> anyhow::Result<String> {
         // Format the messages
-        let formatted_messages = self.model.format_messages(messages);
+        let formatted_messages = self.model.format_messages(messages)?;
 
         // Turn the prompt into tokens
-        let prompt_tokens = self.tokenizer.encode(formatted_messages, true).unwrap();
+        let prompt_tokens = self
+            .tokenizer
+            .encode(formatted_messages, true)
+            .map_err(|e| anyhow::anyhow!("Failed to encode formatted messages: {}", e))?;
 
         // Generate the response with the prompt tokens
-        let response_as_tokens = self
-            .model
-            .prompt_with_tokens(&prompt_tokens.get_ids(), max_length, self.eos_token_id)
-            .unwrap();
+        let response_as_tokens = self.model.prompt_with_tokens(
+            prompt_tokens.get_ids(),
+            max_length,
+            self.eos_token_id,
+        )?;
 
         // Turn the response tokens back into a string
-        let response = self.tokenizer.decode(&response_as_tokens, true).unwrap();
+        let response = self
+            .tokenizer
+            .decode(&response_as_tokens, true)
+            .map_err(|e| anyhow::anyhow!("Failed to decode response tokens: {}", e))?;
 
         Ok(response)
     }

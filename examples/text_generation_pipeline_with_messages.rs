@@ -6,14 +6,14 @@ fn main() -> Result<()> {
     println!("Building pipeline...");
 
     // 1. Create the pipeline, using the builder to configure the model
-    let pipeline = TextGenerationPipelineBuilder::new(ModelOptions::Phi4(Phi4Size::Size14B))
+    let pipeline = TextGenerationPipelineBuilder::new(ModelOptions::Qwen3(Qwen3Size::Size0_6B))
         .temperature(0.7)
         .build()?;
     println!("Pipeline built successfully.");
 
     // 2. Define messages and max length
     let mut messages = vec![
-        Message::system("You are a helpful pirate assistant."),
+        Message::system("You are a helpful assistant."),
         Message::user("Explain the concept of Large Language Models in simple terms."),
     ];
     let max_length = 500; // Maximum number of tokens to generate
@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     messages.push(Message::assistant(generated_text.as_str()));
 
     messages.push(Message::user(
-        "Explain the fibonacci sequence in simple terms. /no_think",
+        "Explain the fibonacci sequence in simple terms.",
     ));
 
     let generated_text = pipeline.message_completion(messages, max_length)?;

@@ -12,7 +12,7 @@ pub trait TextGenerationModel {
 
     fn format_prompt(&self, prompt: &str) -> String;
 
-    fn format_messages(&self, messages: Vec<Message>) -> String;
+    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String>;
 
     fn prompt_with_tokens(
         &self,

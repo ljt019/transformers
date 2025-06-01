@@ -169,24 +169,24 @@ impl RotaryEmbedding {
     }
 }
 
+/// Immutable attention weights (no KV cache)
 #[derive(Debug, Clone)]
-pub(crate) struct AttentionWeights {
-    q_proj: QMatMulWrapper,
-    k_proj: QMatMulWrapper,
-    v_proj: QMatMulWrapper,
-    o_proj: QMatMulWrapper,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
-    num_heads: usize,
-    num_kv_heads: usize,
-    num_kv_groups: usize,
-    head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
-    span_attn: tracing::Span,
+pub(crate) struct AttentionWeightsNoCache {
+    pub q_proj: QMatMulWrapper,
+    pub k_proj: QMatMulWrapper,
+    pub v_proj: QMatMulWrapper,
+    pub o_proj: QMatMulWrapper,
+    pub q_norm: RmsNorm,
+    pub k_norm: RmsNorm,
+    pub num_heads: usize,
+    pub num_kv_heads: usize,
+    pub num_kv_groups: usize,
+    pub head_dim: usize,
+    pub rotary_emb: Arc<RotaryEmbedding>,
+    pub span_attn: tracing::Span,
 }
 
-impl AttentionWeights {
+impl AttentionWeightsNoCache {
     pub(crate) fn new<R: Read + Seek>(
         ct: &gguf_file::Content,
         reader: &mut R,
@@ -230,13 +230,6 @@ impl AttentionWeights {
             rms_norm_eps,
         )?;
 
-        let max_position_embeddings = ct
-            .metadata
-            .get("qwen3.context_length")
-            .and_then(|v| v.to_u32().ok())
-            .unwrap_or(4096) as usize;
-        let kv_cache = KvCache::new(2, max_position_embeddings);
-
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
         Ok(Self {
@@ -251,16 +244,16 @@ impl AttentionWeights {
             num_kv_groups,
             head_dim,
             rotary_emb,
-            kv_cache,
             span_attn,
         })
     }
 
     pub(crate) fn forward(
-        &mut self,
+        &self,
         x: &Tensor,
         attn_mask: Option<&Tensor>,
         offset: usize,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
@@ -291,9 +284,9 @@ impl AttentionWeights {
 
         // Reset KV cache if we're at the first position
         if offset == 0 {
-            self.kv_cache.reset();
+            kv_cache.reset();
         }
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+        let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
@@ -319,15 +312,16 @@ impl AttentionWeights {
     }
 }
 
+/// Immutable layer weights (no KV cache)
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    self_attn: AttentionWeights,
-    mlp: MlpWeights,
-    ln1: RmsNorm,
-    ln2: RmsNorm,
+pub struct LayerWeightsNoCache {
+    pub self_attn: AttentionWeightsNoCache,
+    pub mlp: MlpWeights,
+    pub ln1: RmsNorm,
+    pub ln2: RmsNorm,
 }
 
-impl LayerWeights {
+impl LayerWeightsNoCache {
     fn new<R: Read + Seek>(
         ct: &gguf_file::Content,
         reader: &mut R,
@@ -350,7 +344,7 @@ impl LayerWeights {
             rms_norm_eps,
         )?;
 
-        let self_attn = AttentionWeights::new(
+        let self_attn = AttentionWeightsNoCache::new(
             ct,
             reader,
             num_attention_heads,
@@ -371,9 +365,15 @@ impl LayerWeights {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        mask: Option<&Tensor>,
+        offset: usize,
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
         let h = self.ln1.forward(x)?;
-        let h = self.self_attn.forward(&h, mask, offset)?;
+        let h = self.self_attn.forward(&h, mask, offset, kv_cache)?;
         let x = (x + h)?;
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
@@ -381,19 +381,21 @@ impl LayerWeights {
     }
 }
 
+/// Immutable model weights (shareable across pipelines)
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    embed_tokens: Embedding,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    lm_head: QMatMulWrapper,
-    device: Device,
-    dtype: DType,
-    span: tracing::Span,
-    span_output: tracing::Span,
+pub struct Weights {
+    pub embed_tokens: Embedding,
+    pub layers: Vec<LayerWeightsNoCache>,
+    pub norm: RmsNorm,
+    pub lm_head: QMatMulWrapper,
+    pub device: Device,
+    pub dtype: DType,
+    pub max_position_embeddings: usize,
+    pub span: tracing::Span,
+    pub span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl Weights {
     pub fn from_gguf<R: Read + Seek>(
         ct: gguf_file::Content,
         reader: &mut R,
@@ -435,7 +437,7 @@ impl ModelWeights {
 
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
-            layers.push(LayerWeights::new(
+            layers.push(LayerWeightsNoCache::new(
                 &ct,
                 reader,
                 num_attention_heads,
@@ -470,6 +472,7 @@ impl ModelWeights {
             lm_head,
             device: device.clone(),
             dtype,
+            max_position_embeddings,
             span,
             span_output,
         })
@@ -482,50 +485,114 @@ impl ModelWeights {
         offset: usize,
         sw: Option<usize>,
     ) -> Result<Tensor> {
-        let minf = f32::NEG_INFINITY;
-        let mask: Vec<_> = (0..tgt)
-            .flat_map(|i| {
-                (0..(tgt + offset)).map(move |j| {
-                    let past_ok = j <= i + offset;
-                    let sw_ok = match sw {
-                        Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
-                        None => true,
-                    };
-                    if past_ok && sw_ok {
-                        0.
-                    } else {
-                        minf
-                    }
-                })
-            })
+        // Create indices on device for efficient mask generation
+        let rows = Tensor::arange(0u32, tgt as u32, &self.device)?
+            .to_dtype(DType::I64)?
+            .unsqueeze(1)?; // Shape: [tgt, 1]
+        let cols = Tensor::arange(0u32, (tgt + offset) as u32, &self.device)?
+            .to_dtype(DType::I64)?
+            .unsqueeze(0)?; // Shape: [1, tgt + offset]
+
+        // Create causal mask: row + offset >= col (upper triangular with offset)
+        let offset_tensor = Tensor::new(&[offset as i64], &self.device)?.broadcast_as(&[tgt, 1])?; // Ensure same shape as rows
+        let rows_with_offset = rows.broadcast_add(&offset_tensor)?;
+
+        // Ensure proper broadcasting for comparison
+        let rows_expanded = rows_with_offset.broadcast_as(&[tgt, tgt + offset])?;
+        let cols_expanded = cols.broadcast_as(&[tgt, tgt + offset])?;
+        let causal_mask = rows_expanded.ge(&cols_expanded)?; // [tgt, tgt + offset]
+
+        // Apply sliding window mask if specified
+        let mask = if let Some(w) = sw {
+            let window_size =
+                Tensor::new(&[w as i64], &self.device)?.broadcast_as(&[tgt, tgt + offset])?;
+            let distance = rows_expanded.broadcast_sub(&cols_expanded)?; // row_offset - col
+            let window_mask = distance.le(&window_size)?; // within sliding window
+            causal_mask.mul(&window_mask)? // combine causal and sliding window
+        } else {
+            causal_mask
+        };
+
+        // Convert boolean mask to float with NEG_INFINITY for False, 0.0 for True
+        let zero = Tensor::zeros_like(&mask)?.to_dtype(self.dtype)?;
+        let neg_inf = Tensor::new(&[f32::NEG_INFINITY], &self.device)?
+            .to_dtype(self.dtype)?
+            .broadcast_as(mask.shape())?;
+        let float_mask = mask.where_cond(&zero, &neg_inf)?;
+
+        // Add batch and head dimensions: [b, 1, tgt, tgt + offset]
+        let final_mask =
+            float_mask
+                .unsqueeze(0)?
+                .unsqueeze(0)?
+                .broadcast_as(&[b, 1, tgt, tgt + offset])?;
+
+        final_mask.to_dtype(self.dtype)
+    }
+}
+
+/// Per-pipeline state that holds individual KV caches
+pub struct PipelineState {
+    pub weights: Arc<Weights>,
+    pub kv_caches: Vec<KvCache>,
+}
+
+impl PipelineState {
+    pub fn new(shared_weights: Arc<Weights>) -> Self {
+        let num_layers = shared_weights.layers.len();
+        // Start with small initial cache size and grow dynamically
+        let initial_cache_size = 64; // Small initial size
+        let kv_caches: Vec<KvCache> = (0..num_layers)
+            .map(|_| KvCache::new(2, initial_cache_size))
             .collect();
-        Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
+
+        Self {
+            weights: shared_weights,
+            kv_caches,
+        }
+    }
+
+    /// Create a new pipeline state with a custom initial KV cache size
+    pub fn new_with_cache_size(shared_weights: Arc<Weights>, initial_cache_size: usize) -> Self {
+        let num_layers = shared_weights.layers.len();
+        let kv_caches: Vec<KvCache> = (0..num_layers)
+            .map(|_| KvCache::new(2, initial_cache_size))
+            .collect();
+
+        Self {
+            weights: shared_weights,
+            kv_caches,
+        }
+    }
+
+    pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+        let _enter = self.weights.span.enter();
+        let (b, l) = input.dims2()?;
+        let mut h = self.weights.embed_tokens.forward(input)?;
+
+        let causal = if l == 1 {
+            None
+        } else {
+            Some(self.weights.causal_mask(b, l, offset, None)?)
+        };
+
+        for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
+            h = layer.forward(&h, causal.as_ref(), offset, &mut self.kv_caches[layer_idx])?;
+        }
+
+        let h = self.weights.norm.forward(&h)?;
+
+        let _enter = self.weights.span_output.enter();
+        let last_hidden = h.narrow(1, l - 1, 1)?;
+
+        self.weights.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 }
 
 use super::super::super::ModelWeightForward;
 
-impl ModelWeightForward for ModelWeights {
+impl ModelWeightForward for PipelineState {
     fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        let (b, l) = input.dims2()?;
-        let mut h = self.embed_tokens.forward(input)?;
-
-        let causal = if l == 1 {
-            None
-        } else {
-            Some(self.causal_mask(b, l, offset, None)?)
-        };
-
-        for layer in &mut self.layers {
-            h = layer.forward(&h, causal.as_ref(), offset)?;
-        }
-
-        let h = self.norm.forward(&h)?;
-
-        let _enter = self.span_output.enter();
-        let last_hidden = h.narrow(1, l - 1, 1)?;
-
-        self.lm_head.forward(&last_hidden)?.squeeze(1)
+        self.forward(input, offset)
     }
 }

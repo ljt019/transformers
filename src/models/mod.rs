@@ -1,4 +1,5 @@
 pub mod raw;
+pub mod shared;
 
 pub mod modern_bert;
 pub mod sentiment_modern_bert;

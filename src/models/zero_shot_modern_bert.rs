@@ -241,7 +241,7 @@ impl ZeroShotModernBertModel {
         for encoding in encodings {
             let mut token_ids = encoding.get_ids().to_vec();
             let mut attention_mask = encoding.get_attention_mask().to_vec();
-            let current_len = token_ids.len();
+            let _current_len = token_ids.len();
 
             // Pad
             token_ids.resize(max_len, pad_token_id);
