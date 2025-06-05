@@ -1,33 +1,22 @@
-pub mod fill_mask_pipeline;
-pub mod sentiment_analysis_pipeline;
-pub mod text_generation_pipeline;
-pub mod zero_shot_classification_pipeline;
-
-// New modules for trait-based architecture
-pub mod basic_pipeline;
-pub mod capabilities;
-pub mod combined_pipelines;
-pub mod model_options;
-pub mod tool_calling_pipeline;
-pub mod tools;
-pub mod traits;
+// Pipeline modules organized by functionality
+pub mod fill_mask;
+pub mod sentiment_analysis;
+pub mod text_generation;
+pub mod zero_shot_classification;
 
 use crate::Message;
 
-// Re-export key types for convenience
-pub use basic_pipeline::BasicPipeline;
-pub use capabilities::{ModelCapabilities, ReasoningSupport};
-pub use combined_pipelines::ToggleableReasoningToolsPipeline;
-pub use model_options::{
-    Gemma3ModelOptions, ModelOptionsType, Phi4ModelOptions, Qwen3ModelOptions,
-};
-pub use text_generation_pipeline::{
-    Gemma3Size, Phi4Size, Qwen3Size, TextGenerationPipelineBuilder,
-};
-pub use tool_calling_pipeline::ToolCallingPipeline;
-pub use tools::{Tool, ToolCall, ToolCallResult};
-pub use traits::*;
+// Re-export text generation types for convenience
+pub use text_generation::*;
 
+// Re-export other pipeline types
+pub use fill_mask::*;
+pub use sentiment_analysis::*;
+pub use zero_shot_classification::*;
+
+/// Core trait that all text generation models must implement.
+/// This provides the basic interface for loading tokenizers, formatting prompts,
+/// and generating text with tokens.
 pub trait TextGenerationModel {
     fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
 
@@ -44,7 +33,7 @@ pub trait TextGenerationModel {
         eos_token: u32,
     ) -> anyhow::Result<Vec<u32>>;
 
-    // New methods for advanced capabilities
+    // Advanced capability methods with default implementations
     fn format_prompt_with_reasoning(&self, prompt: &str, reasoning_enabled: bool) -> String {
         // Default implementation - just use normal prompt formatting
         self.format_prompt(prompt)
@@ -61,14 +50,17 @@ pub trait TextGenerationModel {
     }
 }
 
+/// Trait for models that support fill mask functionality.
 pub trait FillMaskModel {
     fn fill_mask(prompt: &str) -> anyhow::Result<String>;
 }
 
+/// Trait for models that support sentiment analysis.
 pub trait SentimentAnalysisModel {
     fn predict(text: &str) -> anyhow::Result<String>;
 }
 
+/// Trait for models that support zero-shot classification.
 pub trait ZeroShotClassificationModel {
     fn predict(
         &self,

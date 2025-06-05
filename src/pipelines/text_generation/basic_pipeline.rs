@@ -1,4 +1,5 @@
-use super::{traits::TextGenerationPipeline, TextGenerationModel};
+use super::traits::TextGenerationPipeline;
+use crate::pipelines::TextGenerationModel;
 use crate::Message;
 use tokenizers::Tokenizer;
 

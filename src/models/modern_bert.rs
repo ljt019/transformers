@@ -1,6 +1,6 @@
 use crate::models::raw::models::modernbert;
 use crate::models::raw::models::modernbert::ModernBertForMaskedLM;
-use crate::pipelines::fill_mask_pipeline::ModernBertSize;
+use crate::pipelines::fill_mask::pipeline::ModernBertSize;
 use crate::utils::load_device;
 use anyhow::{Error as E, Result};
 use candle_core::{DType, Device, IndexOp, Tensor};

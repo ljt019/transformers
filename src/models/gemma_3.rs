@@ -14,7 +14,7 @@ use super::generate_tokens_from_prompt;
 use crate::Message;
 
 // Use the canonical Gemma3Size from the pipeline module
-pub use crate::pipelines::text_generation_pipeline::Gemma3Size;
+pub use crate::pipelines::text_generation::builder::Gemma3Size;
 
 pub struct QuantizedGemma3Model {
     pipeline_state: Arc<RwLock<quantized_gemma3::PipelineState>>,

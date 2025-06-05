@@ -15,7 +15,7 @@ use crate::pipelines::TextGenerationModel;
 use crate::Message;
 
 // Use the canonical Phi4Size from the pipeline module
-pub use crate::pipelines::text_generation_pipeline::Phi4Size;
+pub use crate::pipelines::text_generation::builder::Phi4Size;
 
 // Cache the chat template content to avoid repeated disk I/O and parsing
 static CHAT_TEMPLATE_CONTENT: Lazy<anyhow::Result<String>> = Lazy::new(|| {

@@ -1,26 +1,21 @@
 use super::{
     tools::{Tool, ToolCallResult},
-    traits::{
-        TextGenerationPipeline, TextGenerationPipelineWithToggleableReasoning,
-        TextGenerationPipelineWithTools,
-    },
-    TextGenerationModel,
+    traits::{TextGenerationPipeline, TextGenerationPipelineWithTools},
 };
+use crate::pipelines::TextGenerationModel;
 use crate::Message;
 use tokenizers::Tokenizer;
 
-/// A text generation pipeline with both toggleable reasoning and tool calling capabilities.
-/// Used for models like Qwen3 that support both reasoning control and tool use.
-pub struct ToggleableReasoningToolsPipeline {
+/// A text generation pipeline with tool calling capabilities.
+/// Used for models like Gemma3 that can register and use tools during generation.
+pub struct ToolCallingPipeline {
     model: Box<dyn TextGenerationModel>,
     tokenizer: Tokenizer,
     eos_token_id: u32,
-    reasoning_enabled: bool,
     tools: Vec<Tool>,
-    reasoning_trace: Option<String>,
 }
 
-impl ToggleableReasoningToolsPipeline {
+impl ToolCallingPipeline {
     pub fn new(
         model: Box<dyn TextGenerationModel>,
         tokenizer: Tokenizer,
@@ -30,21 +25,15 @@ impl ToggleableReasoningToolsPipeline {
             model,
             tokenizer,
             eos_token_id,
-            reasoning_enabled: false, // Default to disabled
             tools: Vec::new(),
-            reasoning_trace: None,
         }
     }
 }
 
-impl TextGenerationPipeline for ToggleableReasoningToolsPipeline {
+impl TextGenerationPipeline for ToolCallingPipeline {
     fn prompt_completion(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
-        // Use reasoning-aware prompt formatting if reasoning is enabled
-        let formatted_prompt = if self.reasoning_enabled {
-            self.model.format_prompt_with_reasoning(prompt, true)
-        } else {
-            self.model.format_prompt(prompt)
-        };
+        // Format the prompt
+        let formatted_prompt = self.model.format_prompt(prompt);
 
         // Turn the prompt into tokens
         let prompt_tokens = self
@@ -99,25 +88,7 @@ impl TextGenerationPipeline for ToggleableReasoningToolsPipeline {
     }
 }
 
-impl TextGenerationPipelineWithToggleableReasoning for ToggleableReasoningToolsPipeline {
-    fn enable_reasoning(&mut self) {
-        todo!("Reasoning enabling not yet implemented")
-    }
-
-    fn disable_reasoning(&mut self) {
-        todo!("Reasoning disabling not yet implemented")
-    }
-
-    fn is_reasoning_enabled(&self) -> bool {
-        todo!("Reasoning status check not yet implemented")
-    }
-
-    fn get_reasoning_trace(&self) -> Option<&str> {
-        todo!("Reasoning trace access not yet implemented")
-    }
-}
-
-impl TextGenerationPipelineWithTools for ToggleableReasoningToolsPipeline {
+impl TextGenerationPipelineWithTools for ToolCallingPipeline {
     fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {
         todo!("Tool registration not yet implemented")
     }

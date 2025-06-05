@@ -1,15 +1,15 @@
 use super::{
     basic_pipeline::BasicPipeline,
+    builder::{Gemma3Size, Phi4Size, Qwen3Size},
     capabilities::{ModelCapabilities, ReasoningSupport},
     combined_pipelines::ToggleableReasoningToolsPipeline,
-    text_generation_pipeline::{Gemma3Size, Phi4Size, Qwen3Size},
     tool_calling_pipeline::ToolCallingPipeline,
-    TextGenerationModel,
 };
 use crate::models::gemma_3::QuantizedGemma3Model;
 use crate::models::phi_4::QuantizedPhi4Model;
 use crate::models::qwen_3::QuantizedQwen3Model;
 use crate::models::raw::generation::GenerationParams;
+use crate::pipelines::TextGenerationModel;
 use crate::utils::configs::ModelConfig;
 
 /// Trait for model option types that can build their associated pipeline.

@@ -14,7 +14,7 @@ use crate::pipelines::TextGenerationModel;
 use crate::Message;
 
 // Use the canonical Qwen3Size from the pipeline module
-pub use crate::pipelines::text_generation_pipeline::Qwen3Size;
+pub use crate::pipelines::text_generation::builder::Qwen3Size;
 
 pub struct QuantizedQwen3Model {
     pipeline_state: Arc<RwLock<quantized_qwen3::PipelineState>>,
