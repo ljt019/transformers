@@ -1,15 +1,14 @@
-use crate::models::gemma_3::QuantizedGemma3Model;
-use crate::models::phi_4::QuantizedPhi4Model;
-use crate::models::qwen_3::QuantizedQwen3Model;
-use crate::utils::configs::ModelConfig;
+// This file will contain the new generic builder once we implement the ModelOptionsType trait
+// For now, we keep the size enums here temporarily until they're moved to model_options.rs
 
+// Generic builder for text generation pipelines
+use super::model_options::ModelOptionsType;
 use crate::models::raw::generation::GenerationParams;
-use tokenizers::Tokenizer;
 
-use super::TextGenerationModel;
+// Re-export size enums for convenience
+pub use super::model_options::{Gemma3ModelOptions, Phi4ModelOptions, Qwen3ModelOptions};
 
-use crate::Message;
-
+// Size enums
 #[derive(Clone)]
 pub enum Qwen3Size {
     Size0_6B,
@@ -33,59 +32,72 @@ pub enum Phi4Size {
     Size14B,
 }
 
-/// High-level selection of model family/architecture.
+/// Generic builder for configuring and constructing text generation pipelines.
 ///
-/// You must also specify the size of the model you want to use.
+/// The builder is generic over the model options type, which determines what
+/// type of pipeline will be returned. This provides compile-time type safety
+/// ensuring users only get methods their chosen model supports.
 ///
-/// Example:
+/// # Examples
+///
+/// ## Basic Model (Phi4)
 /// ```rust
-/// use transformers::pipelines::text_generation_pipeline::{ModelOptions, Qwen3Size};
+/// use transformers::pipelines::{TextGenerationPipelineBuilder, Phi4ModelOptions, Phi4Size};
 ///
-/// let model_choice = ModelOptions::Qwen3(Qwen3Size::Size0_6B);
+/// let pipeline = TextGenerationPipelineBuilder::new(
+///     Phi4ModelOptions::new(Phi4Size::Size14B)
+/// )
+/// .temperature(0.7)
+/// .build()?;
+///
+/// // Only basic methods available
+/// let response = pipeline.prompt_completion("Hello, world!", 100)?;
 /// ```
-pub enum ModelOptions {
-    Gemma3(Gemma3Size),
-    Qwen3(Qwen3Size),
-    Phi4(Phi4Size),
-}
-
-impl ModelOptions {
-    /// Construct the quantized model instance and return with its HfConfig
-    pub(crate) fn build_model(
-        self,
-        params: GenerationParams,
-    ) -> anyhow::Result<Box<dyn TextGenerationModel>> {
-        let cfg = ModelConfig::new(params)?;
-        let model: Box<dyn TextGenerationModel> = match self {
-            ModelOptions::Gemma3(size) => Box::new(QuantizedGemma3Model::new(cfg, size)?),
-            ModelOptions::Qwen3(size) => Box::new(QuantizedQwen3Model::new(cfg, size)?),
-            ModelOptions::Phi4(size) => Box::new(QuantizedPhi4Model::new(cfg, size)?),
-        };
-        Ok(model)
-    }
-}
-
-/// Builder for configuring and constructing a text generation pipeline.
 ///
-/// Start by creating a builder with `new(ModelOptions)`, then chain optional settings:
-/// - `.temperature(f64)`: sampling temperature (default: DEFAULT_TEMPERATURE)
-/// - `.repeat_penalty(f32)`: penalty for repeated tokens (default: DEFAULT_REPEAT_PENALTY)
-/// - `.repeat_last_n(usize)`: context length for repeat penalty (default: DEFAULT_REPEAT_LAST_N)
-/// - `.seed(u64)`: random seed (default: DEFAULT_SEED)
+/// ## Tool Calling Model (Gemma3)
+/// ```rust
+/// use transformers::pipelines::{TextGenerationPipelineBuilder, Gemma3ModelOptions, Gemma3Size};
 ///
-/// Finally, call `.build()` to obtain a `TextGenerationPipeline`.
-pub struct TextGenerationPipelineBuilder {
-    model_choice: ModelOptions,
+/// let mut pipeline = TextGenerationPipelineBuilder::new(
+///     Gemma3ModelOptions::new(Gemma3Size::Size4B)
+/// )
+/// .build()?;
+///
+/// // Tool methods are available
+/// pipeline.register_tool(my_tool)?;
+/// let result = pipeline.call_with_tools("What is 2+2?", 100)?;
+/// ```
+///
+/// ## Full Featured Model (Qwen3)
+/// ```rust
+/// use transformers::pipelines::{TextGenerationPipelineBuilder, Qwen3ModelOptions, Qwen3Size};
+///
+/// let mut pipeline = TextGenerationPipelineBuilder::new(
+///     Qwen3ModelOptions::new(Qwen3Size::Size8B)
+/// )
+/// .build()?;
+///
+/// // Both reasoning and tool methods available
+/// pipeline.enable_reasoning();
+/// pipeline.register_tool(my_tool)?;
+/// let result = pipeline.call_with_tools("Solve this step by step: ...", 500)?;
+/// ```
+pub struct TextGenerationPipelineBuilder<M: ModelOptionsType> {
+    model_options: M,
     temperature: Option<f64>,
     repeat_penalty: Option<f32>,
     repeat_last_n: Option<usize>,
     seed: Option<u64>,
 }
 
-impl TextGenerationPipelineBuilder {
-    pub fn new(model_choice: ModelOptions) -> Self {
+impl<M: ModelOptionsType> TextGenerationPipelineBuilder<M> {
+    /// Create a new builder with the specified model options.
+    ///
+    /// The model options determine what type of pipeline will be created
+    /// and what capabilities it will have.
+    pub fn new(model_options: M) -> Self {
         Self {
-            model_choice,
+            model_options,
             temperature: None,
             repeat_penalty: None,
             repeat_last_n: None,
@@ -93,27 +105,41 @@ impl TextGenerationPipelineBuilder {
         }
     }
 
+    /// Set the sampling temperature (default: 0.7).
+    ///
+    /// Higher values make output more random, lower values more deterministic.
     pub fn temperature(mut self, temperature: f64) -> Self {
         self.temperature = Some(temperature);
         self
     }
 
+    /// Set the repeat penalty (default: 1.1).
+    ///
+    /// Values > 1.0 discourage repetition, values < 1.0 encourage it.
     pub fn repeat_penalty(mut self, repeat_penalty: f32) -> Self {
         self.repeat_penalty = Some(repeat_penalty);
         self
     }
 
+    /// Set the repeat penalty context length (default: 64).
+    ///
+    /// Number of previous tokens to consider when applying repeat penalty.
     pub fn repeat_last_n(mut self, repeat_last_n: usize) -> Self {
         self.repeat_last_n = Some(repeat_last_n);
         self
     }
 
+    /// Set the random seed for reproducible generation (default: 299792458).
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
         self
     }
 
-    pub fn build(self) -> anyhow::Result<TextGenerationPipeline> {
+    /// Build the text generation pipeline.
+    ///
+    /// The return type depends on the model options provided to the builder.
+    /// Each model type returns a pipeline with the appropriate capabilities.
+    pub fn build(self) -> anyhow::Result<M::Pipeline> {
         let temperature = self.temperature.unwrap_or(crate::DEFAULT_TEMPERATURE);
         let repeat_penalty = self.repeat_penalty.unwrap_or(crate::DEFAULT_REPEAT_PENALTY);
         let repeat_last_n = self.repeat_last_n.unwrap_or(crate::DEFAULT_REPEAT_LAST_N);
@@ -122,112 +148,7 @@ impl TextGenerationPipelineBuilder {
         let generation_params =
             GenerationParams::new(temperature, repeat_penalty, repeat_last_n, seed);
 
-        let model = self.model_choice.build_model(generation_params)?;
-        let tokenizer = model.load_tokenizer()?;
-
-        // Get EOS token ID
-        let eos_token_str = model.get_eos_token_str();
-        let eos_token_encoding = tokenizer.encode(eos_token_str, false).map_err(|e| {
-            anyhow::anyhow!("Failed to encode EOS token '{}': {}", eos_token_str, e)
-        })?;
-        let eos_ids = eos_token_encoding.get_ids();
-        if eos_ids.len() != 1 {
-            anyhow::bail!(
-                "EOS token string '{}' did not tokenize to a single ID. Got: {:?}",
-                eos_token_str,
-                eos_ids
-            );
-        }
-        let eos_token_id = eos_ids[0];
-
-        Ok(TextGenerationPipeline {
-            model,
-            tokenizer,
-            eos_token_id,
-        })
-    }
-}
-
-/// A ready-to-use pipeline for generating text using a quantized model.
-///
-/// After building with `TextGenerationPipelineBuilder`, call
-/// `generate_text(prompt, max_length)` to produce text completions.
-///
-/// Example:
-/// ```rust
-/// use transformers::pipelines::text_generation_pipeline::{TextGenerationPipelineBuilder, ModelOptions, Gemma3Size};
-///
-/// let pipeline = TextGenerationPipelineBuilder::new(
-///     ModelOptions::Gemma3(Gemma3Size::Size1B),
-/// )
-/// .temperature(0.7)
-/// .build().unwrap();
-///
-/// let output = pipeline.generate_text("What is the meaning of life?", 5).unwrap();
-///
-/// println!("{}", output);
-/// ```
-pub struct TextGenerationPipeline {
-    /// Tokenizer corresponding to the model's vocabulary.
-    model: Box<dyn TextGenerationModel>,
-    tokenizer: Tokenizer,
-    eos_token_id: u32,
-}
-
-impl TextGenerationPipeline {
-    pub fn prompt_completion(&self, prompt: &str, max_length: usize) -> anyhow::Result<String> {
-        // Format the prompt
-        let formatted_prompt = self.model.format_prompt(prompt);
-
-        // Turn the prompt into tokens
-        let prompt_tokens = self
-            .tokenizer
-            .encode(formatted_prompt, true)
-            .map_err(|e| anyhow::anyhow!("Failed to encode prompt: {}", e))?;
-
-        // Generate the response with the prompt tokens
-        let response_as_tokens = self.model.prompt_with_tokens(
-            prompt_tokens.get_ids(),
-            max_length,
-            self.eos_token_id,
-        )?;
-
-        // Turn the response tokens back into a string
-        let response = self
-            .tokenizer
-            .decode(&response_as_tokens, true)
-            .map_err(|e| anyhow::anyhow!("Failed to decode response tokens: {}", e))?;
-
-        Ok(response)
-    }
-
-    pub fn message_completion(
-        &self,
-        messages: Vec<Message>,
-        max_length: usize,
-    ) -> anyhow::Result<String> {
-        // Format the messages
-        let formatted_messages = self.model.format_messages(messages)?;
-
-        // Turn the prompt into tokens
-        let prompt_tokens = self
-            .tokenizer
-            .encode(formatted_messages, true)
-            .map_err(|e| anyhow::anyhow!("Failed to encode formatted messages: {}", e))?;
-
-        // Generate the response with the prompt tokens
-        let response_as_tokens = self.model.prompt_with_tokens(
-            prompt_tokens.get_ids(),
-            max_length,
-            self.eos_token_id,
-        )?;
-
-        // Turn the response tokens back into a string
-        let response = self
-            .tokenizer
-            .decode(&response_as_tokens, true)
-            .map_err(|e| anyhow::anyhow!("Failed to decode response tokens: {}", e))?;
-
-        Ok(response)
+        // Delegate to the model options to build the appropriate pipeline
+        self.model_options.build_pipeline(generation_params)
     }
 }
