@@ -1,36 +1,11 @@
-// This file will contain the new generic builder once we implement the ModelOptionsType trait
-// For now, we keep the size enums here temporarily until they're moved to model_options.rs
-
 // Generic builder for text generation pipelines
 use super::model_options::ModelOptionsType;
-use crate::models::raw::generation::GenerationParams;
+use crate::models::generation::GenerationParams;
 
-// Re-export size enums for convenience
-pub use super::model_options::{Gemma3ModelOptions, Phi4ModelOptions, Qwen3ModelOptions};
-
-// Size enums
-#[derive(Clone)]
-pub enum Qwen3Size {
-    Size0_6B,
-    Size1_7B,
-    Size4B,
-    Size8B,
-    Size14B,
-    Size32B,
-}
-
-#[derive(Clone)]
-pub enum Gemma3Size {
-    Size1B,
-    Size4B,
-    Size12B,
-    Size27B,
-}
-
-#[derive(Clone)]
-pub enum Phi4Size {
-    Size14B,
-}
+// Re-export for convenience
+pub use super::model_options::{
+    Gemma3ModelOptions, Gemma3Size, Phi4ModelOptions, Phi4Size, Qwen3ModelOptions, Qwen3Size,
+};
 
 /// Generic builder for configuring and constructing text generation pipelines.
 ///

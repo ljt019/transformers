@@ -1,16 +1,39 @@
 use super::{
     basic_pipeline::BasicPipeline,
-    builder::{Gemma3Size, Phi4Size, Qwen3Size},
     capabilities::{ModelCapabilities, ReasoningSupport},
     combined_pipelines::ToggleableReasoningToolsPipeline,
     tool_calling_pipeline::ToolCallingPipeline,
 };
-use crate::models::gemma_3::QuantizedGemma3Model;
+use crate::models::generation::GenerationParams;
 use crate::models::phi_4::QuantizedPhi4Model;
-use crate::models::qwen_3::QuantizedQwen3Model;
-use crate::models::raw::generation::GenerationParams;
+use crate::models::quantized_gemma3::QuantizedGemma3Model;
+use crate::models::quantized_qwen3::QuantizedQwen3Model;
 use crate::pipelines::TextGenerationModel;
 use crate::utils::configs::ModelConfig;
+
+// Model size enums - define these here where they're used
+#[derive(Clone)]
+pub enum Qwen3Size {
+    Size0_6B,
+    Size1_7B,
+    Size4B,
+    Size8B,
+    Size14B,
+    Size32B,
+}
+
+#[derive(Clone)]
+pub enum Gemma3Size {
+    Size1B,
+    Size4B,
+    Size12B,
+    Size27B,
+}
+
+#[derive(Clone)]
+pub enum Phi4Size {
+    Size14B,
+}
 
 /// Trait for model option types that can build their associated pipeline.
 /// Each model type implements this to specify what pipeline it creates.

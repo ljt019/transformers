@@ -1,15 +1,14 @@
-pub mod raw;
-pub mod shared;
+pub mod generation;
 
-pub mod modern_bert;
-pub mod sentiment_modern_bert;
-pub mod zero_shot_modern_bert;
+pub mod modernbert;
+pub mod quantized_gemma3;
+pub mod quantized_qwen3;
 
-pub mod gemma_3;
 pub mod phi_4;
-pub mod qwen_3;
+pub mod raw;
 
-pub use raw::generation::{apply_repeat_penalty, initialize_logits_processor};
+pub use generation::{apply_repeat_penalty, initialize_logits_processor};
+pub use raw::RmsNorm;
 
 trait ModelWeightForward {
     fn forward(
@@ -23,7 +22,7 @@ use candle_core::{Device, Tensor};
 
 fn generate_tokens_from_prompt<M: ModelWeightForward>(
     prompt_tokens: &[u32],
-    params: &raw::generation::GenerationParams,
+    params: &generation::GenerationParams,
     model_weights: &mut M,
     max_len: usize,
     device: &Device,

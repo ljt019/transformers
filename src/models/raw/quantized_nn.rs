@@ -101,26 +101,22 @@ pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<L
 pub struct RmsNorm {
     weight: Tensor,
     eps: f64,
-    span: tracing::Span,
 }
 
 impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
-        Ok(Self { weight, eps, span })
+        Ok(Self { weight, eps })
     }
 
     pub fn from_qtensor(weight: QTensor, eps: f64) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let weight = weight.dequantize(&weight.device())?;
-        Ok(Self { weight, eps, span })
+        Ok(Self { weight, eps })
     }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
         candle_nn::ops::rms_norm(x, &self.weight, self.eps as f32)
     }
 }
