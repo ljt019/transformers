@@ -61,7 +61,9 @@ impl RoPE {
             .map(|i| (1.0 / theta.powf(i as f64 / head_dim as f64)) as f32)
             .collect();
 
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq.len()), device)?.to_dtype(dtype)?;
+        // Compute the length first to avoid borrowing after move.
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?.to_dtype(dtype)?;
         let positions = Tensor::arange(0u32, max_seq_len as u32, device)?
             .to_dtype(dtype)?
             .reshape((max_seq_len, 1))?;
@@ -363,7 +365,6 @@ impl TransformerLayer {
 }
 
 /// Shared model weights that can be used across multiple inference contexts.
-#[derive(Debug, Clone)]
 pub struct ModelWeights {
     embeddings: Embedding,
     layers: Vec<TransformerLayer>,
@@ -477,11 +478,10 @@ impl ModelWeights {
             .broadcast_as(&[seq_len, total_len])?
             .ge(&col_ids.broadcast_as(&[seq_len, total_len])?)?;
 
-        // Convert to float mask with -inf for masked positions
-        let neg_inf = Tensor::new(&[f32::NEG_INFINITY], &self.device)?
-            .to_dtype(self.dtype)?
-            .broadcast_as(&[seq_len, total_len])?;
-        let zero = Tensor::zeros(&[seq_len, total_len], self.dtype, &self.device)?;
+        // Convert to float mask with -inf (F32) for masked positions
+        let neg_inf =
+            Tensor::new(&[f32::NEG_INFINITY], &self.device)?.broadcast_as(&[seq_len, total_len])?;
+        let zero = Tensor::zeros(&[seq_len, total_len], DType::F32, &self.device)?;
 
         let float_mask = mask.where_cond(&zero, &neg_inf)?;
 
@@ -725,37 +725,53 @@ Pipeline Stuff
 
 */
 
-trait TextGenerationModel {
-    type Options;
+use crate::pipelines::text_generation_pipeline::text_generation_model::{
+    LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
+};
 
-    fn new(options: Self::Options) -> Self;
+impl LanguageModelContext for Context {
+    fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
+        Context::generate(self, input)
+    }
 
-    fn prompt_completion(&mut self, prompt: &str) -> String;
-}
-
-trait ToggleableReasoning {
-    fn toggle_reasoning(&self, enable: bool) -> Result<()>;
-}
-
-trait ToolCalling {
-    fn register_tool(&mut self, tool: String);
-    fn toggle_tools(&mut self, enable: bool);
+    fn reset(&mut self) {
+        Context::reset(self);
+    }
 }
 
 impl TextGenerationModel for Qwen3Model {
+    type Context = crate::models::quantized_qwen3::Context;
     type Options = Qwen3Size;
+
+    fn get_eos_token(&self) -> u32 {
+        let eos_token = self
+            .get_tokenizer()
+            .unwrap()
+            .encode("<|im_end|>", true)
+            .unwrap();
+        return eos_token.get_ids()[0];
+    }
 
     fn new(options: Self::Options) -> Self {
         Qwen3Model::from_hf(&candle_core::Device::Cpu, options).unwrap()
     }
 
-    fn prompt_completion(&mut self, prompt: &str) -> String {
-        prompt.into()
+    fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
+        Qwen3Model::get_tokenizer(self)
+    }
+
+    fn new_context(&self) -> Context {
+        Context::new(self.weights.clone())
+    }
+
+    fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
+        context.reset();
+        Ok(())
     }
 }
 
 impl ToggleableReasoning for Qwen3Model {
-    fn toggle_reasoning(&self, enable: bool) -> Result<()> {
+    fn toggle_reasoning(&self, enable: bool) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -768,78 +784,6 @@ impl ToolCalling for Qwen3Model {
     fn toggle_tools(&mut self, enable: bool) {
         todo!()
     }
-}
-
-struct TextGenerationPipeline<M: TextGenerationModel> {
-    model: M,
-    // Other pipeline state
-}
-
-impl<M: TextGenerationModel> TextGenerationPipeline<M> {
-    pub fn new(model: M) -> Self {
-        Self { model }
-    }
-}
-
-impl<M: TextGenerationModel> TextGenerationPipeline<M> {
-    pub fn prompt_completion(&mut self, prompt: &str) -> String {
-        self.model.prompt_completion(prompt)
-    }
-}
-
-impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
-    pub fn toggle_reasoning(&mut self, enable: bool) -> Result<()> {
-        self.model.toggle_reasoning(enable)
-    }
-}
-
-impl<M: TextGenerationModel + ToolCalling> TextGenerationPipeline<M> {
-    pub fn register_tool(&mut self, tool: String) {
-        self.model.register_tool(tool)
-    }
-
-    pub fn toggle_tools(&mut self, enable: bool) {
-        self.model.toggle_tools(enable)
-    }
-}
-
-struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
-    model_options: M::Options,
-    temperature: f32,
-}
-
-impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
-    pub fn new(options: M::Options) -> Self {
-        Self {
-            model_options: options,
-            temperature: 0.7,
-        }
-    }
-
-    pub fn temperature(&mut self, temperature: f32) -> &mut Self {
-        self.temperature = temperature;
-        self
-    }
-
-    pub fn build(self) -> TextGenerationPipeline<M> {
-        TextGenerationPipeline::new(M::new(self.model_options))
-    }
-}
-
-impl TextGenerationPipelineBuilder<Qwen3Model> {
-    pub fn qwen3(size: Qwen3Size) -> Self {
-        Self {
-            model_options: size,
-            temperature: 0.7,
-        }
-    }
-}
-
-fn test_hehe() {
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B).build();
-
-    pipeline.toggle_reasoning(true).unwrap();
-    pipeline.register_tool("get_weather".to_string());
 }
 
 /*

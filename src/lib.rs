@@ -1,6 +1,6 @@
-mod models;
 mod utils;
 
+pub mod models;
 pub mod pipelines;
 
 pub(crate) const DEFAULT_TEMPERATURE: f64 = 0.7;

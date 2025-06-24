@@ -90,7 +90,9 @@ impl RoPE {
             .map(|i| (1.0 / rope_theta.powf(i as f64 / dim as f64)) as f32)
             .collect();
 
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq.len()), device)?.to_dtype(dtype)?;
+        // Capture length before the vector is moved into `from_vec`.
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?.to_dtype(dtype)?;
         let max_seq_len = config.max_position_embeddings;
         let positions = Tensor::arange(0u32, max_seq_len as u32, device)?
             .to_dtype(dtype)?

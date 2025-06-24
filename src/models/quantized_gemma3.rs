@@ -853,14 +853,49 @@ Pipeline stuff
 
 */
 
-use crate::utils::loaders::HfLoader;
-use minijinja::{context, Environment};
-use serde_json::Value;
+use crate::pipelines::text_generation_pipeline::text_generation_model::{
+    LanguageModelContext, TextGenerationModel,
+};
 
-use crate::models::generate_tokens_from_prompt;
-use crate::pipelines::TextGenerationModel;
-use crate::Message;
+impl LanguageModelContext for Context {
+    fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
+        Context::generate(self, input)
+    }
 
+    fn reset(&mut self) {
+        Context::reset(self);
+    }
+}
+
+impl TextGenerationModel for Gemma3Model {
+    type Options = Gemma3Size;
+    type Context = crate::models::quantized_gemma3::Context;
+
+    fn new(options: Self::Options) -> Self {
+        Gemma3Model::from_hf(&candle_core::Device::Cpu, options).unwrap()
+    }
+
+    fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        Gemma3Model::get_tokenizer(self)
+    }
+
+    fn get_eos_token(&self) -> u32 {
+        let tokenizer = self.get_tokenizer().unwrap();
+        let encoded = tokenizer.encode("<end_of_turn>", true).unwrap();
+        encoded.get_ids()[0]
+    }
+
+    fn new_context(&self) -> Context {
+        Context::new(self.weights.clone())
+    }
+
+    fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
+        context.reset();
+        Ok(())
+    }
+}
+
+/*
 impl TextGenerationModel for Gemma3Model {
     fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
         // The tokenizer is the same for all sizes, so we can just use the 1B model
@@ -933,3 +968,4 @@ impl TextGenerationModel for Gemma3Model {
 
 // Backward compatibility alias for old naming
 pub type QuantizedGemma3Model = Gemma3Model;
+*/
