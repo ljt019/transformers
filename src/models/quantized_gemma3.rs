@@ -602,7 +602,7 @@ impl Gemma3Size {
     }
 }
 
-use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
 /// High-level Gemma3 model interface for text generation.

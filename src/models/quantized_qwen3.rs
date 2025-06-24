@@ -533,7 +533,7 @@ impl Qwen3Size {
     }
 }
 
-use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.

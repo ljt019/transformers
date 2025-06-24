@@ -4,7 +4,7 @@ use super::text_generation_model::{ToggleableReasoning, ToolCalling};
 use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };
-use crate::utils::load_device;
+use crate::pipelines::utils::load_device;
 use candle_core::Tensor;
 use tokenizers::Tokenizer;
 

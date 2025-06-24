@@ -621,7 +621,7 @@ pub struct ModelInfo {
 Pipeline Implementations
 */
 
-use crate::utils::load_device;
+use crate::pipelines::utils::load_device;
 use anyhow::{Error as E, Result as AnyhowResult};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
