@@ -11,6 +11,8 @@ fn main() -> Result<()> {
         .max_len(15)
         .build()?;
 
+    pipeline.set_reasoning(false)?;
+
     println!("Pipeline built successfully.");
 
     // 2. Define prompt and max length
@@ -25,7 +27,7 @@ fn main() -> Result<()> {
     println!("{}", generated_text);
     println!("--- End of Text ---\n");
 
-    let second_prompt = "Explain the fibonacci sequence in simple terms. /no_think";
+    let second_prompt = "Explain the fibonacci sequence in simple terms.";
 
     let generated_text = pipeline.prompt_completion(second_prompt)?;
 

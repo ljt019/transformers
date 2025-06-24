@@ -1,3 +1,4 @@
+use crate::models::quantized_gemma3::{Gemma3Model, Gemma3Size};
 use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
 
 use super::text_generation_model::TextGenerationModel;
@@ -29,6 +30,21 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
+    pub fn repeat_penalty(mut self, repeat_penalty: f32) -> Self {
+        self.repeat_penalty = repeat_penalty;
+        self
+    }
+
+    pub fn repeat_last_n(mut self, repeat_last_n: usize) -> Self {
+        self.repeat_last_n = repeat_last_n;
+        self
+    }
+
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
     pub fn max_len(mut self, max_len: usize) -> Self {
         self.max_len = max_len;
         self
@@ -52,6 +68,12 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
 
 impl TextGenerationPipelineBuilder<Qwen3Model> {
     pub fn qwen3(size: Qwen3Size) -> Self {
+        Self::new(size)
+    }
+}
+
+impl TextGenerationPipelineBuilder<Gemma3Model> {
+    pub fn gemma3(size: Gemma3Size) -> Self {
         Self::new(size)
     }
 }

@@ -539,6 +539,7 @@ use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 /// This struct manages the shared weights and creates individual contexts.
 pub struct Qwen3Model {
     weights: Arc<ModelWeights>,
+    reasoning: bool,
 }
 
 impl Qwen3Model {
@@ -546,7 +547,10 @@ impl Qwen3Model {
     pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
-        Ok(Self { weights })
+        Ok(Self {
+            weights,
+            reasoning: true,
+        })
     }
 
     /// Load the model from hf
@@ -558,7 +562,10 @@ impl Qwen3Model {
         let (mut file, content) = model_loader.load()?;
 
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
-        Ok(Self { weights })
+        Ok(Self {
+            weights,
+            reasoning: true,
+        })
     }
 
     /// Get the models suggested tokenizer
@@ -729,6 +736,9 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
+use minijinja::{context, Environment};
+use serde_json::Value;
+
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
         Context::generate(self, input)
@@ -760,59 +770,25 @@ impl TextGenerationModel for Qwen3Model {
         Qwen3Model::get_tokenizer(self)
     }
 
-    fn new_context(&self) -> Context {
-        Context::new(self.weights.clone())
-    }
+    fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+        // Determine thinking mode: check for /think or /no_think in the last user message
+        let mut enable_thinking = self.reasoning; // Default to model's reasoning flag
 
-    fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
-        context.reset();
-        Ok(())
-    }
-}
+        // Check the last user message for soft switches
+        if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == "user") {
+            let content = last_user_msg.content();
+            if content.contains("/think") {
+                enable_thinking = true;
+            } else if content.contains("/no_think") {
+                enable_thinking = false;
+            }
+        }
 
-impl ToggleableReasoning for Qwen3Model {
-    fn toggle_reasoning(&self, enable: bool) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-impl ToolCalling for Qwen3Model {
-    fn register_tool(&mut self, tool: String) {
-        todo!()
-    }
-
-    fn toggle_tools(&mut self, enable: bool) {
-        todo!()
-    }
-}
-
-/*
-use crate::utils::loaders::HfLoader;
-use minijinja::{context, Environment};
-use serde_json::Value;
-
-use crate::models::generate_tokens_from_prompt;
-use crate::pipelines::TextGenerationModel;
-use crate::Message;
-
-impl TextGenerationModel for Qwen3Model {
-    fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        let tokenizer = self.get_tokenizer()?;
-
-        Ok(tokenizer)
-    }
-
-    fn get_eos_token_str(&self) -> &str {
-        "<|im_end|>"
-    }
-
-    fn format_prompt(&self, prompt: &str) -> String {
-        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
-    }
-
-    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
         // Create a loader for the tokenizer config
-        let tokenizer_config_loader = HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
+        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
+            "Qwen/Qwen3-0.6B",
+            "tokenizer_config.json",
+        );
 
         // Loads the tokenizer_config.json file and returns the path to the json file as a PathBuf
         let tokenizer_config_path = tokenizer_config_loader
@@ -911,12 +887,22 @@ impl TextGenerationModel for Qwen3Model {
             .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
 
         // Convert messages to a format that works better with Jinja2
+        // Also clean up /think and /no_think from user messages for template rendering
         let messages_dicts: Vec<serde_json::Value> = messages
             .into_iter()
             .map(|msg| {
+                let mut content = msg.content().to_string();
+                // Remove /think and /no_think from user messages for cleaner output
+                if msg.role() == "user" {
+                    content = content
+                        .replace("/think", "")
+                        .replace("/no_think", "")
+                        .trim()
+                        .to_string();
+                }
                 serde_json::json!({
                     "role": msg.role(),
-                    "content": msg.content(),
+                    "content": content,
                 })
             })
             .collect();
@@ -926,11 +912,66 @@ impl TextGenerationModel for Qwen3Model {
             .render(context! {
                 messages => messages_dicts,
                 add_generation_prompt => true,
+                enable_thinking => enable_thinking,
             })
             .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
 
         Ok(rendered)
     }
+
+    fn new_context(&self) -> Context {
+        Context::new(self.weights.clone())
+    }
+
+    fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
+        context.reset();
+        Ok(())
+    }
+}
+
+impl ToggleableReasoning for Qwen3Model {
+    fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()> {
+        self.reasoning = enable;
+        Ok(())
+    }
+}
+
+impl ToolCalling for Qwen3Model {
+    fn register_tool(&mut self, tool: String) {
+        todo!()
+    }
+
+    fn toggle_tools(&mut self, enable: bool) {
+        todo!()
+    }
+}
+
+/*
+use crate::utils::loaders::HfLoader;
+use minijinja::{context, Environment};
+use serde_json::Value;
+
+use crate::models::generate_tokens_from_prompt;
+use crate::pipelines::TextGenerationModel;
+use crate::Message;
+
+impl TextGenerationModel for Qwen3Model {
+    fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
+        let tokenizer = self.get_tokenizer()?;
+
+        Ok(tokenizer)
+    }
+
+    fn get_eos_token_str(&self) -> &str {
+        "<|im_end|>"
+    }
+
+    fn format_prompt(&self, prompt: &str) -> String {
+        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
+    }
+
+    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
+
 
     fn prompt_with_tokens(
         &self,

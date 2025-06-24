@@ -37,9 +37,13 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     where
         M::Context: LanguageModelContext,
     {
+        let templated_prompt = self
+            .model
+            .apply_chat_template(&[crate::Message::user(prompt)])?;
+
         let prompt_tokens = self
             .model_tokenizer
-            .encode(prompt, true)
+            .encode(templated_prompt, true)
             .expect("Failed to encode prompt");
 
         let mut logits_processor =
@@ -95,8 +99,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 }
 
 impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
-    pub fn toggle_reasoning(&mut self, enable: bool) -> anyhow::Result<()> {
-        self.model.toggle_reasoning(enable)
+    pub fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()> {
+        self.model.set_reasoning(enable)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::Message;
 use candle_core::Tensor;
 
 /// Minimal interface required by the text-generation pipeline for a model context.
@@ -25,6 +26,8 @@ pub trait TextGenerationModel {
 
     fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
 
+    fn apply_chat_template(&self, messages: &[Message]) -> anyhow::Result<String>;
+
     fn get_eos_token(&self) -> u32;
 
     fn new_context(&self) -> Self::Context;
@@ -35,7 +38,7 @@ pub trait TextGenerationModel {
 pub trait Reasoning {}
 
 pub trait ToggleableReasoning {
-    fn toggle_reasoning(&self, enable: bool) -> anyhow::Result<()>;
+    fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()>;
 }
 
 pub trait ToolCalling {

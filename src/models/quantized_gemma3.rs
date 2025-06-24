@@ -857,6 +857,9 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel,
 };
 
+use minijinja::{context, Environment};
+use serde_json::Value;
+
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
         Context::generate(self, input)
@@ -877,6 +880,47 @@ impl TextGenerationModel for Gemma3Model {
 
     fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
         Gemma3Model::get_tokenizer(self)
+    }
+
+    fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+        // Create a loader for the tokenizer config (using the 1B model's repo)
+        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
+            "google/gemma-3-1b-it",
+            "tokenizer_config.json",
+        );
+
+        // Loads the tokenizer_config.json file
+        let tokenizer_config_path = tokenizer_config_loader
+            .load()
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer config: {}", e))?;
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read tokenizer config file: {}", e))?;
+
+        // Parse JSON and get the 'chat_template'
+        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse tokenizer config JSON: {}", e))?;
+        let chat_template = config_json["chat_template"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
+
+        // Create a minijinja environment
+        let mut env = Environment::new();
+        env.add_template("chat", chat_template)
+            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
+
+        let tmpl = env
+            .get_template("chat")
+            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
+
+        // Render the template
+        let rendered = tmpl
+            .render(context! {
+                messages => messages,
+                add_generation_prompt => true, // Common practice, adjust if needed
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
+
+        Ok(rendered)
     }
 
     fn get_eos_token(&self) -> u32 {
@@ -911,42 +955,7 @@ impl TextGenerationModel for Gemma3Model {
     }
 
     fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
-        // Create a loader for the tokenizer config (using the 1B model's repo)
-        let tokenizer_config_loader =
-            HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
-        // Loads the tokenizer_config.json file
-        let tokenizer_config_path = tokenizer_config_loader
-            .load()
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer config: {}", e))?;
-        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read tokenizer config file: {}", e))?;
-
-        // Parse JSON and get the 'chat_template'
-        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse tokenizer config JSON: {}", e))?;
-        let chat_template = config_json["chat_template"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
-
-        // Create a minijinja environment
-        let mut env = Environment::new();
-        env.add_template("chat", chat_template)
-            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
-
-        let tmpl = env
-            .get_template("chat")
-            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
-
-        // Render the template
-        let rendered = tmpl
-            .render(context! {
-                messages => messages,
-                add_generation_prompt => true, // Common practice, adjust if needed
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
-
-        Ok(rendered)
     }
 
     fn format_prompt(&self, prompt: &str) -> String {
