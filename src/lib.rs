@@ -6,6 +6,15 @@ pub(crate) const DEFAULT_REPEAT_PENALTY: f32 = 1.1;
 pub(crate) const DEFAULT_REPEAT_LAST_N: usize = 64;
 pub(crate) const DEFAULT_SEED: u64 = 299792458;
 
+// Re-export the `#[tool]` procedural macro so users can simply write
+// `use transformers::tool;` and annotate their functions without adding an
+// explicit dependency on the `tool_macro` crate.
+// The macro lives in the separate `tool_macro` crate to avoid a proc-macro/
+// normal crate cyclic dependency, but re-exporting it here keeps the public
+// API surface of `transformers` ergonomic.
+
+pub use tool_macro::tool;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// An individual message in a chat.
 pub struct Message {

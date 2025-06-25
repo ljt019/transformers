@@ -1,52 +1,136 @@
-//! Model cache key for identifying cached models across different configurations.
+//! Model caching utilities for sharing weights across multiple pipelines.
+//!
+//! This module provides a thread-safe cache for model instances, allowing
+//! multiple pipelines to share the same underlying model weights while
+//! maintaining independent inference contexts.
 
-use anyhow::Result;
-use candle_core::Device;
-use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
-/// Configuration key for caching models based on model path and device
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ModelCacheKey {
-    pub model_path: String,
-    pub device_type: String,
-    pub device_id: Option<usize>,
-    pub model_hash: u64,
+/// A thread-safe cache for model instances.
+///
+/// The cache stores models by a string key (typically the model size/variant)
+/// and ensures that multiple requests for the same model return clones that
+/// share the underlying weights.
+pub struct ModelCache {
+    cache: Arc<Mutex<HashMap<(TypeId, String), Arc<dyn Any + Send + Sync>>>>,
 }
 
-impl ModelCacheKey {
-    /// Create a new cache key from model path and device
-    pub fn new(model_path: &str, device: &Device) -> Result<Self> {
-        let mut hasher = DefaultHasher::new();
-        model_path.hash(&mut hasher);
-        let model_hash = hasher.finish();
+impl ModelCache {
+    /// Create a new empty model cache.
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
 
-        let (device_type, device_id) = match device {
-            Device::Cpu => ("CPU".to_string(), None),
-            Device::Cuda(_cuda_device) => {
-                // TODO: Fix device indexing for multi-GPU setups
-                // Currently hard-coded to 0 because candle_core::Device doesn't expose
-                // the actual device index via a public API. This can cause incorrect
-                // cache key mapping in multi-GPU setups where different devices should
-                // have separate cache entries.
-                ("CUDA".to_string(), Some(0))
-            }
-            Device::Metal(_metal_device) => {
-                // TODO: Fix device indexing for multi-MPS setups
-                // Currently hard-coded to 0 because candle_core::Device doesn't expose
-                // the actual device index via a public API. This can cause incorrect
-                // cache key mapping in multi-MPS setups where different devices should
-                // have separate cache entries.
-                ("Metal".to_string(), Some(0))
-            }
-        };
+    /// Get or create a model from the cache.
+    ///
+    /// If a model with the given key already exists, a clone is returned.
+    /// Otherwise, the loader function is called to create a new model instance.
+    ///
+    /// # Arguments
+    /// * `key` - A unique identifier for this model variant (e.g., "qwen3-4b")
+    /// * `loader` - A function that creates a new model instance if not cached
+    ///
+    /// # Type Parameters
+    /// * `M` - The model type, must be Clone + Send + Sync
+    pub fn get_or_create<M, F>(&self, key: &str, loader: F) -> anyhow::Result<M>
+    where
+        M: Clone + Send + Sync + 'static,
+        F: FnOnce() -> anyhow::Result<M>,
+    {
+        let type_id = TypeId::of::<M>();
+        let cache_key = (type_id, key.to_string());
 
-        Ok(Self {
-            model_path: model_path.to_string(),
-            device_type,
-            device_id,
-            model_hash,
-        })
+        // First, try to get from cache
+        {
+            let cache = self.cache.lock().unwrap();
+            if let Some(cached) = cache.get(&cache_key) {
+                if let Some(model) = cached.downcast_ref::<M>() {
+                    return Ok(model.clone());
+                }
+            }
+        }
+
+        // Not in cache, create new instance
+        let model = loader()?;
+
+        // Store in cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            cache.insert(
+                cache_key,
+                Arc::new(model.clone()) as Arc<dyn Any + Send + Sync>,
+            );
+        }
+
+        Ok(model)
+    }
+
+    /// Clear all cached models.
+    pub fn clear(&self) {
+        let mut cache = self.cache.lock().unwrap();
+        cache.clear();
+    }
+
+    /// Get the number of cached models.
+    pub fn len(&self) -> usize {
+        let cache = self.cache.lock().unwrap();
+        cache.len()
+    }
+}
+
+impl Default for ModelCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Global model cache instance.
+///
+/// This provides a convenient way to share models across the entire application
+/// without having to pass the cache around.
+static GLOBAL_MODEL_CACHE: once_cell::sync::Lazy<ModelCache> =
+    once_cell::sync::Lazy::new(ModelCache::new);
+
+/// Get a reference to the global model cache.
+pub fn global_cache() -> &'static ModelCache {
+    &GLOBAL_MODEL_CACHE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestModel {
+        id: String,
+    }
+
+    #[test]
+    fn test_cache_returns_same_instance() {
+        let cache = ModelCache::new();
+
+        let model1 = cache
+            .get_or_create::<TestModel, _>("test-model", || {
+                Ok(TestModel {
+                    id: "original".to_string(),
+                })
+            })
+            .unwrap();
+
+        let model2 = cache
+            .get_or_create::<TestModel, _>("test-model", || {
+                // This should not be called
+                Ok(TestModel {
+                    id: "new".to_string(),
+                })
+            })
+            .unwrap();
+
+        assert_eq!(model1.id, model2.id);
+        assert_eq!(model1.id, "original");
     }
 }

@@ -266,6 +266,7 @@ impl Attention {
 
         // Expand KV for Grouped Query Attention
         let num_groups = self.num_heads / self.num_kv_heads;
+
         let keys = repeat_kv(keys, num_groups)?.contiguous()?;
         let values = repeat_kv(values, num_groups)?.contiguous()?;
 
@@ -493,6 +494,7 @@ impl ModelWeights {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Qwen3Size {
     Size0_6B,
     Size1_7B,
@@ -533,13 +535,29 @@ impl Qwen3Size {
     }
 }
 
+impl std::fmt::Display for Qwen3Size {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Qwen3Size::Size0_6B => "qwen3-0.6b",
+            Qwen3Size::Size1_7B => "qwen3-1.7b",
+            Qwen3Size::Size4B => "qwen3-4b",
+            Qwen3Size::Size8B => "qwen3-8b",
+            Qwen3Size::Size14B => "qwen3-14b",
+            Qwen3Size::Size32B => "qwen3-32b",
+        };
+        write!(f, "{}", name)
+    }
+}
+
 use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
+#[derive(Clone)]
 pub struct Qwen3Model {
     weights: Arc<ModelWeights>,
     reasoning: bool,
+    tools: Vec<crate::pipelines::text_generation_pipeline::text_generation_model::Tool>,
 }
 
 impl Qwen3Model {
@@ -550,6 +568,7 @@ impl Qwen3Model {
         Ok(Self {
             weights,
             reasoning: true,
+            tools: Vec::new(),
         })
     }
 
@@ -565,6 +584,7 @@ impl Qwen3Model {
         Ok(Self {
             weights,
             reasoning: true,
+            tools: Vec::new(),
         })
     }
 
@@ -747,6 +767,16 @@ impl LanguageModelContext for Context {
     fn reset(&mut self) {
         Context::reset(self);
     }
+
+    fn position(&self) -> usize {
+        self.position
+    }
+
+    fn can_continue_from(&self, position: usize) -> bool {
+        // Check if we can continue from the given position
+        // The cache is valid if the requested position matches our current position
+        self.position == position
+    }
 }
 
 impl TextGenerationModel for Qwen3Model {
@@ -754,12 +784,14 @@ impl TextGenerationModel for Qwen3Model {
     type Options = Qwen3Size;
 
     fn get_eos_token(&self) -> u32 {
-        let eos_token = self
-            .get_tokenizer()
+        self.get_tokenizer()
             .unwrap()
-            .encode("<|im_end|>", true)
-            .unwrap();
-        return eos_token.get_ids()[0];
+            .token_to_id("<|im_end|>")
+            .expect("<|im_end|> token not in vocab") as u32
+    }
+
+    fn get_max_seq_len(&self) -> usize {
+        self.weights.max_seq_len
     }
 
     fn new(options: Self::Options) -> Self {
@@ -877,6 +909,11 @@ impl TextGenerationModel for Qwen3Model {
             s.trim_matches(c).to_string()
         });
 
+        // Add a filter to serialize values to JSON (used by the chat template).
+        env.add_filter("tojson", |value: minijinja::value::Value| -> String {
+            serde_json::to_string(&value).unwrap_or_default()
+        });
+
         // Add the patched template
         env.add_template("chat", &chat_template_str)
             .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
@@ -913,6 +950,7 @@ impl TextGenerationModel for Qwen3Model {
                 messages => messages_dicts,
                 add_generation_prompt => true,
                 enable_thinking => enable_thinking,
+                tools => self.registered_tools(),
             })
             .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
 
@@ -936,13 +974,35 @@ impl ToggleableReasoning for Qwen3Model {
     }
 }
 
+use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
+
 impl ToolCalling for Qwen3Model {
-    fn register_tool(&mut self, tool: String) {
-        todo!()
+    fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {
+        // Replace existing tool with same name if present
+        if let Some(pos) = self.tools.iter().position(|t| t.name() == tool.name()) {
+            self.tools[pos] = tool;
+        } else {
+            self.tools.push(tool);
+        }
+        Ok(())
     }
 
-    fn toggle_tools(&mut self, enable: bool) {
-        todo!()
+    fn registered_tools(&self) -> Vec<Tool> {
+        self.tools.clone()
+    }
+
+    fn call_tool(
+        &mut self,
+        tool_name: String,
+        parameters: std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<String> {
+        if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
+            Ok(tool.call(parameters))
+        } else {
+            Err(anyhow::anyhow!(format!(
+                "Tool '{tool_name}' is not registered"
+            )))
+        }
     }
 }
 

@@ -572,6 +572,7 @@ impl ModelWeights {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Gemma3Size {
     Size1B,
     Size4B,
@@ -602,11 +603,24 @@ impl Gemma3Size {
     }
 }
 
+impl std::fmt::Display for Gemma3Size {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Gemma3Size::Size1B => "gemma3-1b",
+            Gemma3Size::Size4B => "gemma3-4b",
+            Gemma3Size::Size12B => "gemma3-12b",
+            Gemma3Size::Size27B => "gemma3-27b",
+        };
+        write!(f, "{}", name)
+    }
+}
+
 use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
 /// High-level Gemma3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
+#[derive(Clone)]
 pub struct Gemma3Model {
     weights: Arc<ModelWeights>,
 }
@@ -868,6 +882,16 @@ impl LanguageModelContext for Context {
     fn reset(&mut self) {
         Context::reset(self);
     }
+
+    fn position(&self) -> usize {
+        self.position
+    }
+
+    fn can_continue_from(&self, position: usize) -> bool {
+        // Check if we can continue from the given position
+        // The cache is valid if the requested position matches our current position
+        self.position == position
+    }
 }
 
 impl TextGenerationModel for Gemma3Model {
@@ -925,8 +949,13 @@ impl TextGenerationModel for Gemma3Model {
 
     fn get_eos_token(&self) -> u32 {
         let tokenizer = self.get_tokenizer().unwrap();
-        let encoded = tokenizer.encode("<end_of_turn>", true).unwrap();
-        encoded.get_ids()[0]
+        tokenizer
+            .token_to_id("<end_of_turn>")
+            .expect("<end_of_turn> token not found in vocab") as u32
+    }
+
+    fn get_max_seq_len(&self) -> usize {
+        self.weights.max_seq_len
     }
 
     fn new_context(&self) -> Context {

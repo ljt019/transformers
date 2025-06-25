@@ -167,12 +167,28 @@ impl LogitsProcessor {
 
 /// Initializes a LogitsProcessor based on sampling parameters.
 pub fn initialize_logits_processor(params: &GenerationParams, seed: u64) -> LogitsProcessor {
-    let sampling = if params.temperature <= 0. {
+    let temperature = params.temperature.max(1e-7);
+
+    let sampling = if params.temperature <= 0.0 {
         Sampling::ArgMax
-    } else {
-        Sampling::All {
-            temperature: params.temperature,
+    } else if params.top_k > 0 && params.top_p < 1.0 {
+        Sampling::TopKThenTopP {
+            k: params.top_k,
+            p: params.top_p,
+            temperature,
         }
+    } else if params.top_k > 0 {
+        Sampling::TopK {
+            k: params.top_k,
+            temperature,
+        }
+    } else if params.top_p < 1.0 {
+        Sampling::TopP {
+            p: params.top_p,
+            temperature,
+        }
+    } else {
+        Sampling::All { temperature }
     };
     LogitsProcessor::from_sampling(seed, sampling)
 }
@@ -210,6 +226,8 @@ pub struct GenerationParams {
     pub repeat_last_n: usize,
     pub seed: u64,
     pub max_len: usize,
+    pub top_p: f64,   // 0.0..=1.0 ; 0 or 1 means disabled
+    pub top_k: usize, // 0 means disabled
 }
 
 impl GenerationParams {
@@ -219,6 +237,8 @@ impl GenerationParams {
         repeat_last_n: usize,
         seed: u64,
         max_len: usize,
+        top_p: f64,
+        top_k: usize,
     ) -> Self {
         Self {
             temperature,
@@ -226,6 +246,8 @@ impl GenerationParams {
             repeat_last_n,
             seed,
             max_len,
+            top_p,
+            top_k,
         }
     }
 }
