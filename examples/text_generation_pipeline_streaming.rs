@@ -1,48 +1,44 @@
-use anyhow::Result;
-use futures;
-use futures::StreamExt;
-use std::io::Write;
-use transformers::models::Qwen3Size;
 use transformers::pipelines::text_generation_pipeline::*;
-use transformers::Message;
 
-fn main() -> Result<()> {
-    futures::executor::block_on(async {
-        println!("Building pipeline...");
+#[tool]
+/// Returns the weather in a given city
+fn get_weather(city: String) -> String {
+    let string = format!("The weather in {} is: 31 degress, cloudy skies", city);
+    string
+}
 
-        // 1. Create the pipeline, using the builder to configure the model
-        let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
-            .temperature(0.7)
-            .max_len(500)
-            .build()?;
-        println!("Pipeline built successfully.");
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("Building pipeline...");
 
-        // 2. Define messages and max length
-        let messages = vec![
-            Message::system("You are a helpful assistant."),
-            Message::user("Explain the concept of Large Language Models in simple terms."),
-        ];
+    // 1. Create the pipeline, using the builder to configure the model
+    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .temperature(0.7)
+        .max_len(500)
+        .build()?;
 
-        // Get the last user message in the messages vector
-        let prompt = messages
-            .iter()
-            .rev()
-            .find(|message| message.role() == "user")
-            .unwrap()
-            .content();
+    println!("Pipeline built successfully.");
 
-        println!("Generating text for prompt: '{}'", prompt);
+    pipeline.register_tools(tools![get_weather])?;
 
-        // 3. Generate text
-        let mut stream = pipeline.message_completion_stream(&messages)?;
+    // 2. Define messages
+    let messages = vec![
+        Message::system("You are a helpful assistant."),
+        Message::user("What's the weather like in Tokyo?"),
+    ];
 
-        println!("\n--- Generated Text ---");
-        while let Some(tok) = stream.next().await {
-            print!("{}", tok);
-            std::io::stdout().flush().unwrap();
-        }
-        println!("\n--- End of Text ---\n");
+    println!(
+        "Generating completion for prompt: '{}'\n",
+        messages.last_user().unwrap()
+    );
 
-        Ok(())
-    })
+    // 3. Generate text
+    let mut stream = pipeline.message_completion_stream_with_tools(&messages)?;
+
+    while let Some(tok) = stream.next().await {
+        print!("{}", tok);
+        std::io::stdout().flush().unwrap();
+    }
+
+    Ok(())
 }

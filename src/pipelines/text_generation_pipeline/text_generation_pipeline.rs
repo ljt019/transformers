@@ -326,7 +326,7 @@ impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
     }
 }
 
-impl<M: TextGenerationModel + ToolCalling> TextGenerationPipeline<M> {
+impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     pub fn register_tool<T: IntoTool>(&mut self, tool: T) -> anyhow::Result<()> {
         self.model.register_tool(tool.into_tool())
     }
@@ -443,6 +443,95 @@ impl<M: TextGenerationModel + ToolCalling> TextGenerationPipeline<M> {
         Err(anyhow::anyhow!(
             "Maximum number of tool iterations reached without final response"
         ))
+    }
+
+    /// Same as [`prompt_completion_with_tools`], but streams all tokens including tool calls.
+    /// This method streams everything: the assistant's thinking, tool call blocks, tool responses,
+    /// and the final response in one seamless stream.
+    pub fn prompt_completion_stream_with_tools(
+        &mut self,
+        prompt: &str,
+    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+        let messages = vec![crate::Message::user(prompt)];
+        self.message_completion_stream_with_tools(&messages)
+    }
+
+    /// Same as [`message_completion_with_tools`], but streams all tokens including tool calls.
+    /// This method streams everything: the assistant's thinking, tool call blocks, tool responses,
+    /// and the final response in one seamless stream.
+    pub fn message_completion_stream_with_tools(
+        &mut self,
+        messages: &[crate::Message],
+    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+        use async_stream::stream;
+        use futures::StreamExt;
+
+        // We'll use a simpler approach: generate one response at a time, check for tools,
+        // then continue. This avoids the complex async stream with self capture.
+        let mut messages = messages.to_vec();
+
+        Ok(Box::pin(stream! {
+            const MAX_TOOL_ITERATIONS: usize = 8;
+
+            for _iteration in 0..MAX_TOOL_ITERATIONS {
+                // Generate one complete response and collect it
+                let accumulated = {
+                    let mut response_stream = match self.message_completion_stream(&messages) {
+                        Ok(stream) => stream,
+                        Err(e) => {
+                            yield format!("Error: {}", e);
+                            return;
+                        }
+                    };
+
+                    let mut acc = String::new();
+                    while let Some(token) = response_stream.next().await {
+                        acc.push_str(&token);
+                        yield token;
+                    }
+                    acc
+                }; // response_stream is dropped here, releasing the borrow
+
+                // Check for tool calls
+                let tool_calls = match Self::extract_tool_calls(&accumulated) {
+                    Ok(calls) => calls,
+                    Err(e) => {
+                        yield format!("\nError parsing tool calls: {}", e);
+                        return;
+                    }
+                };
+
+                // If no tool calls, we're done
+                if tool_calls.is_empty() {
+                    return;
+                }
+
+                // Add assistant message
+                messages.push(crate::Message::assistant(&accumulated));
+
+                // Execute tool calls (now self is not borrowed)
+                for tc in tool_calls {
+                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                        Ok(result) => {
+                            let tool_response = format!("\n\n<tool_response tool=\"{}\">\n{}\n</tool_response>\n\n", tc.name, result);
+                            yield tool_response;
+
+                            messages.push(crate::Message {
+                                role: "tool".to_string(),
+                                content: result,
+                            });
+                        }
+                        Err(e) => {
+                            yield format!("\nTool error for {}: {}", tc.name, e);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            yield format!("\nMaximum tool iterations ({}) reached", MAX_TOOL_ITERATIONS);
+        })
+            as Pin<Box<dyn Stream<Item = String> + Send + '_>>)
     }
 
     /// Extract tool calls from the text returned by the model.

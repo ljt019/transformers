@@ -1,24 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
-use proc_macro2::{Ident as Ident2, Span};
 use quote::{format_ident, quote};
-use serde_json::json;
-use syn::{
-    parse_macro_input, Attribute, Expr, FnArg, GenericArgument, ItemFn, Lit, Meta, Pat,
-    PathArguments, Type,
-};
-
-/// Helper function to deny reference types in parameters
-fn deny_references(ty: &Type) -> Result<(), syn::Error> {
-    if matches!(ty, Type::Reference(_)) {
-        Err(syn::Error::new_spanned(
-            ty,
-            "reference types (`&T`) are not supported; use owned types like `String` or `Vec<T>`",
-        ))
-    } else {
-        Ok(())
-    }
-}
+use syn::{parse_macro_input, Attribute, Expr, FnArg, ItemFn, Lit, Meta, Pat, Type};
 
 /// Extract the doc comments on the original function, concatenated and trimmed.
 fn extract_doc(attrs: &[Attribute]) -> String {

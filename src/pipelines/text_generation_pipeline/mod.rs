@@ -21,6 +21,15 @@ pub use crate::tool;
 pub use futures::StreamExt;
 pub use futures::TryStreamExt;
 
+// Re-export commonly used types and traits
+pub use crate::{Message, MessageVecExt};
+
+// Re-export Result type for convenience
+pub use anyhow::Result;
+
+// Re-export std::io::Write for flushing stdout in examples
+pub use std::io::Write;
+
 #[macro_export]
 macro_rules! tools {
     ($($tool:ident),+ $(,)?) => {

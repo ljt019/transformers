@@ -1,7 +1,7 @@
 use anyhow::Result;
 use transformers::models::Qwen3Size;
 use transformers::pipelines::text_generation_pipeline::*;
-use transformers::Message;
+use transformers::prelude::*;
 
 fn main() -> Result<()> {
     println!("Building pipeline...");
@@ -19,13 +19,8 @@ fn main() -> Result<()> {
         Message::user("Explain the concept of Large Language Models in simple terms."),
     ];
 
-    // Get the last user message in the messages vector
-    let prompt = messages
-        .iter()
-        .rev()
-        .find(|message| message.role() == "user")
-        .unwrap()
-        .content();
+    // Get the last user message using the convenient method
+    let prompt = messages.last_user().unwrap();
 
     println!("Generating text for prompt: '{}'", prompt);
 

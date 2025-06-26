@@ -1,3 +1,9 @@
+#![allow(warnings)]
+#![allow(unused_imports)]
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+
 pub mod models;
 pub mod pipelines;
 
@@ -63,4 +69,66 @@ impl Message {
     pub fn content(&self) -> &str {
         &self.content
     }
+}
+
+/// Trait extension for Vec<Message> that provides convenient methods for
+/// accessing common message types without verbose iterator chains.
+pub trait MessageVecExt {
+    /// Get the content of the last user message in the conversation.
+    ///
+    /// # Returns
+    /// - `Some(&str)` - The content of the last user message if found
+    /// - `None` - If no user messages exist in the conversation
+    fn last_user(&self) -> Option<&str>;
+
+    /// Get the content of the last assistant message in the conversation.
+    ///
+    /// # Returns
+    /// - `Some(&str)` - The content of the last assistant message if found
+    /// - `None` - If no assistant messages exist in the conversation
+    fn last_assistant(&self) -> Option<&str>;
+
+    /// Get the content of the system message in the conversation.
+    ///
+    /// # Returns
+    /// - `Some(&str)` - The content of the system message if found
+    /// - `None` - If no system message exists in the conversation
+    fn system(&self) -> Option<&str>;
+}
+
+impl<T: AsRef<[Message]>> MessageVecExt for T {
+    fn last_user(&self) -> Option<&str> {
+        self.as_ref()
+            .iter()
+            .rev()
+            .find(|message| message.role() == "user")
+            .map(|msg| msg.content())
+    }
+
+    fn last_assistant(&self) -> Option<&str> {
+        self.as_ref()
+            .iter()
+            .rev()
+            .find(|message| message.role() == "assistant")
+            .map(|msg| msg.content())
+    }
+
+    fn system(&self) -> Option<&str> {
+        self.as_ref()
+            .iter()
+            .find(|message| message.role() == "system")
+            .map(|msg| msg.content())
+    }
+}
+
+/// Prelude module for convenient imports.
+///
+/// This module re-exports the most commonly used types and traits from the transformers crate.
+/// Import this module to get access to `Message` and `MessageVecExt` together:
+///
+/// ```rust
+/// use transformers::prelude::*;
+/// ```
+pub mod prelude {
+    pub use crate::{Message, MessageVecExt};
 }
