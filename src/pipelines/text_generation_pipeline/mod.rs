@@ -15,6 +15,12 @@ pub use crate::models::quantized_qwen3::Qwen3Size;
 // Re-export the procedural macro (functions as an item in Rust 2018+).
 pub use crate::tool;
 
+// Re-export `futures::StreamExt` so users iterating over streaming outputs
+// get the `next`/`try_next` extension methods automatically when they
+// glob-import this module.
+pub use futures::StreamExt;
+pub use futures::TryStreamExt;
+
 #[macro_export]
 macro_rules! tools {
     ($($tool:ident),+ $(,)?) => {

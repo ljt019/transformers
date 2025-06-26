@@ -19,6 +19,19 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
     last_processed_tokens: Vec<u32>,
 }
 
+use async_stream::try_stream;
+use futures::Stream;
+use std::pin::Pin;
+
+// Internal stream type that still carries `anyhow::Result`. We wrap this in the
+// public-facing helpers so the user sees a plain `Stream<Item = String>`.
+type RawTokenStream<'a> = Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>;
+
+// Helper to convert `anyhow::Result<String>` into `String` (panicking on error).
+fn unwrap_res(r: anyhow::Result<String>) -> String {
+    r.expect("stream generation failed")
+}
+
 impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     pub fn new(model: M, gen_params: GenerationParams) -> anyhow::Result<Self> {
         let model_tokenizer = model.get_tokenizer()?;
@@ -51,9 +64,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let prompt_tokens = self
             .model_tokenizer
             .encode(templated_prompt, true)
-            .expect("Failed to encode prompt");
+            .map_err(|e| anyhow::anyhow!(e))?
+            .get_ids()
+            .to_vec();
 
-        self.completion(&prompt_tokens.get_ids())
+        self.completion(&prompt_tokens)
     }
 
     pub fn message_completion(&mut self, messages: &[crate::Message]) -> anyhow::Result<String> {
@@ -62,7 +77,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let new_tokens = self
             .model_tokenizer
             .encode(templated_prompt, true)
-            .expect("Failed to encode prompt")
+            .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
             .to_vec();
 
@@ -113,6 +128,62 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.last_processed_tokens = new_tokens;
 
         Ok(response)
+    }
+
+    pub fn prompt_completion_stream(
+        &mut self,
+        prompt: &str,
+    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+        // Fresh turn → reset context
+        self.context.reset();
+
+        let templated = self
+            .model
+            .apply_chat_template(&[crate::Message::user(prompt)])?;
+        let tokens = self
+            .model_tokenizer
+            .encode(templated, true)
+            .map_err(|e| anyhow::anyhow!(e))?
+            .get_ids()
+            .to_vec();
+
+        // Convert the internal Result stream into a user-friendly String stream.
+        use futures::StreamExt;
+        let inner = self.raw_completion_stream(tokens);
+        Ok(inner.map(unwrap_res))
+    }
+
+    pub fn message_completion_stream(
+        &mut self,
+        messages: &[crate::Message],
+    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+        let templated = self.model.apply_chat_template(messages)?;
+        let new_tokens = self
+            .model_tokenizer
+            .encode(templated, true)
+            .map_err(|e| anyhow::anyhow!(e))?
+            .get_ids()
+            .to_vec();
+
+        // Same cache logic you already have -------------------------------
+        let max_seq = self.model.get_max_seq_len();
+        if self.context.position() + new_tokens.len() > max_seq {
+            self.context.reset();
+            self.last_processed_tokens.clear();
+        } else if self.can_reuse_cache(&new_tokens) {
+            let suffix = new_tokens[self.last_processed_tokens.len()..].to_vec();
+            self.last_processed_tokens = new_tokens;
+            let inner = self.raw_completion_stream(suffix);
+            use futures::StreamExt;
+            return Ok(inner.map(unwrap_res));
+        } else {
+            self.context.reset();
+        }
+
+        self.last_processed_tokens = new_tokens.clone();
+        use futures::StreamExt;
+        let inner = self.raw_completion_stream(new_tokens);
+        Ok(inner.map(unwrap_res))
     }
 
     fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
@@ -178,6 +249,74 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .join("");
 
         Ok(generated_tokens_str)
+    }
+
+    fn raw_completion_stream<'a>(&'a mut self, input_tokens: Vec<u32>) -> RawTokenStream<'a>
+    where
+        M: 'a,
+    {
+        // Capture everything the async generator needs **by value** so
+        // nothing is moved out of &mut self after we return.
+        let device = self.device.clone();
+        let eos_token = self.model.get_eos_token();
+        let tokenizer = self.model_tokenizer.clone();
+        let context = &mut self.context; // still lives inside self
+        let params = self.gen_params.clone();
+
+        Box::pin(try_stream! {
+            const CHUNK_SIZE: usize = 64;
+
+            let mut logits_processor =
+                initialize_logits_processor(&params, params.seed);
+
+            // Send the whole prompt first (exactly as in `completion`)
+            let mut idx = 0;
+            let mut last_logits = None;
+            while idx < input_tokens.len() {
+                let end   = usize::min(idx + CHUNK_SIZE, input_tokens.len());
+                let chunk = &input_tokens[idx..end];
+
+                let input  = Tensor::new(chunk, &device)?.unsqueeze(0)?;
+                let logits = context.generate(&input)?;
+                last_logits = Some(logits.squeeze(0)?);
+                idx = end;
+            }
+
+            // First sampled token -----------------------------------------
+            let mut generated: Vec<u32> = Vec::with_capacity(params.max_len);
+            let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
+            generated.push(next_token);
+            yield tokenizer.decode(&[next_token], true).unwrap();
+
+            // Autoregressive loop -----------------------------------------
+            for _ in 0..params.max_len {
+                if next_token == eos_token {
+                    break;
+                }
+
+                let input  = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+                let logits = context.generate(&input)?;
+                let logits = logits.squeeze(0)?;
+
+                // Repeat-penalty handling
+                let start_at = generated
+                    .len()
+                    .saturating_sub(params.repeat_last_n);
+                let penalty_ctx = &generated[start_at..];
+
+                let logits = if params.repeat_penalty <= 1. || penalty_ctx.is_empty() {
+                    logits
+                } else {
+                    apply_repeat_penalty(&logits, params.repeat_penalty, penalty_ctx)?
+                };
+
+                next_token = logits_processor.sample(&logits)?;
+                generated.push(next_token);
+
+                // ── yield to the caller ───────────────────────────────────
+                yield tokenizer.decode(&[next_token], true).unwrap();
+            }
+        })
     }
 }
 

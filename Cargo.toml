@@ -21,3 +21,5 @@ tool_macro = { path = "./tool_macro", version = "0.1.0" }
 parking_lot = "0.12"
 once_cell = "1.20"
 regex = "1"
+futures = "0.3.31"
+async-stream = "0.3.6"

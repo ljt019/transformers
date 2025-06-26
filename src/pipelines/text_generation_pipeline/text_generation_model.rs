@@ -6,7 +6,7 @@ use candle_core::Tensor;
 /// Both `Qwen3Model::Context` and `Gemma3Model::Context` already expose compatible
 /// `generate` and `reset` methods, so we only need a thin trait wrapper that the
 /// pipeline can work with generically.
-pub trait LanguageModelContext {
+pub trait LanguageModelContext: Send {
     /// Forward the input tokens through the model, returning the logits for the
     /// next token.
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor>;
@@ -25,8 +25,9 @@ pub trait TextGenerationModel {
     /// Type used to configure model loading (e.g. which checkpoint size).
     type Options;
     /// The context type that will be returned by `new_context` and consumed by
-    /// the pipeline. It must implement [`LanguageModelContext`].
-    type Context: LanguageModelContext;
+    /// the pipeline. It must implement [`LanguageModelContext`] and be `Send`
+    /// so that asynchronous streams capturing it can be moved across threads.
+    type Context: LanguageModelContext + Send;
 
     fn new(options: Self::Options) -> Self;
 
