@@ -1,7 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Attribute, Expr, FnArg, ItemFn, Lit, Meta, Pat, Type};
+use syn::{parse_macro_input, Attribute, Expr, FnArg, ItemFn, Lit, Meta, Pat, ReturnType, Type};
 
 /// Extract the doc comments on the original function, concatenated and trimmed.
 fn extract_doc(attrs: &[Attribute]) -> String {
@@ -21,6 +21,81 @@ fn extract_doc(attrs: &[Attribute]) -> String {
         }
     }
     out
+}
+
+/// Parse the tool attribute arguments for error strategy and retries.
+fn parse_tool_config(args: TokenStream) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    let default_error_strategy = quote! { transformers::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy::Fail };
+    let default_retries = quote! { 3u32 };
+
+    if args.is_empty() {
+        return (default_error_strategy, default_retries);
+    }
+
+    let mut error_strategy = default_error_strategy;
+    let mut retries = default_retries;
+
+    // Try to parse as multiple comma-separated arguments
+    let args_str = args.to_string();
+
+    // Split by comma and process each part
+    for part in args_str.split(',') {
+        let part = part.trim();
+
+        if part.starts_with("on_error") {
+            // Extract the value after the =
+            if let Some(value_part) = part.split('=').nth(1) {
+                let value_part = value_part.trim();
+                if let Ok(expr) = syn::parse_str::<syn::Expr>(value_part) {
+                    error_strategy = parse_error_strategy_from_expr(&expr);
+                }
+            }
+        } else if part.starts_with("retries") {
+            // Extract the value after the =
+            if let Some(value_part) = part.split('=').nth(1) {
+                let value_part = value_part.trim();
+                if let Ok(lit) = syn::parse_str::<syn::LitInt>(value_part) {
+                    let retry_count = lit.base10_parse::<u32>().unwrap_or(3);
+                    retries = quote! { #retry_count };
+                }
+            }
+        }
+    }
+
+    (error_strategy, retries)
+}
+
+fn parse_error_strategy_from_expr(expr: &syn::Expr) -> proc_macro2::TokenStream {
+    // Convert the expression to a string to check what it contains
+    let expr_str = quote!(#expr).to_string();
+
+    // Clean up the string (remove extra spaces)
+    let expr_str = expr_str.replace(" ", "");
+
+    // Handle different forms of the error strategy
+    if expr_str == "Fail" || expr_str.contains("ErrorStrategy::Fail") {
+        quote! { transformers::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy::Fail }
+    } else if expr_str == "ReturnToModel" || expr_str.contains("ErrorStrategy::ReturnToModel") {
+        quote! { transformers::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy::ReturnToModel }
+    } else {
+        // Generate a compile-time error for invalid strategies
+        syn::Error::new_spanned(
+            expr,
+            "Unknown error strategy. Valid options are: ErrorStrategy::Fail, ErrorStrategy::ReturnToModel"
+        ).to_compile_error()
+    }
+}
+
+/// Check if the function returns a Result type
+fn returns_result(output: &ReturnType) -> bool {
+    if let ReturnType::Type(_, ty) = output {
+        if let Type::Path(type_path) = &**ty {
+            if let Some(segment) = type_path.path.segments.last() {
+                return segment.ident == "Result";
+            }
+        }
+    }
+    false
 }
 
 /// Very small type-name mapper.
@@ -52,12 +127,20 @@ fn type_to_json_type(ty: &Type) -> String {
 ///     (a + b).to_string()
 /// }
 ///
+/// #[tool(on_error = ErrorStrategy::ReturnToModel)]
+/// fn get_weather(city: String) -> Result<String, WeatherError> {
+///     // ...
+/// }
+///
 /// // In user code:
 /// let mut pipeline = ...;
 /// pipeline.register_tools(tools![add]);
 /// ```
 #[proc_macro_attribute]
-pub fn tool(_args: TokenStream, item: TokenStream) -> TokenStream {
+pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the error strategy and retries from args
+    let (error_strategy, max_retries) = parse_tool_config(args);
+
     // Parse the source function.
     let input_fn = parse_macro_input!(item as ItemFn);
 
@@ -68,6 +151,9 @@ pub fn tool(_args: TokenStream, item: TokenStream) -> TokenStream {
 
     // Doc comments become description.
     let description = extract_doc(&input_fn.attrs);
+
+    // Check if function returns Result
+    let is_result = returns_result(&input_fn.sig.output);
 
     // Gather parameter information.
     let mut schema_kv_pairs = Vec::new();
@@ -104,6 +190,26 @@ pub fn tool(_args: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    // Generate different wrapper logic based on return type
+    let wrapper_body = if is_result {
+        quote! {
+            #( #extraction_stmts )*
+            let result = #fn_name_ident( #(#call_args),* );
+
+            // Convert the result to the expected type
+            match result {
+                Ok(s) => Ok(s),
+                Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+            }
+        }
+    } else {
+        quote! {
+            #( #extraction_stmts )*
+            let result = #fn_name_ident( #(#call_args),* );
+            Ok(result)
+        }
+    };
+
     // Generate the output tokens: keep original fn, plus wrapper + data.
     let expanded = quote! {
         // Keep the original function as-is
@@ -111,9 +217,8 @@ pub fn tool(_args: TokenStream, item: TokenStream) -> TokenStream {
 
         // Automatically generated wrapper that matches the `Tool` function signature.
         #[doc(hidden)]
-        fn #wrapper_name(mut parameters: std::collections::HashMap<String, String>) -> String {
-            #( #extraction_stmts )*
-            #fn_name_ident( #(#call_args),* )
+        fn #wrapper_name(mut parameters: std::collections::HashMap<String, String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+            #wrapper_body
         }
 
         // Hidden function used by the tools! macro
@@ -127,6 +232,8 @@ pub fn tool(_args: TokenStream, item: TokenStream) -> TokenStream {
                 #description.to_string(),
                 parameters,
                 #wrapper_name,
+                #error_strategy,
+                #max_retries,
             )
         }
 

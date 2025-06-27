@@ -9,12 +9,46 @@ use rand::{distr::Distribution, SeedableRng};
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
     ArgMax,
-    All { temperature: f64 },
-    TopK { k: usize, temperature: f64 },
-    TopP { p: f64, temperature: f64 },
-    TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    All {
+        temperature: f64,
+    },
+    TopK {
+        k: usize,
+        temperature: f64,
+    },
+    TopP {
+        p: f64,
+        temperature: f64,
+    },
+    TopKThenTopP {
+        k: usize,
+        p: f64,
+        temperature: f64,
+    },
+    MinP {
+        min_p: f64,
+        temperature: f64,
+    },
+    TopKThenMinP {
+        k: usize,
+        min_p: f64,
+        temperature: f64,
+    },
+    TopPThenMinP {
+        p: f64,
+        min_p: f64,
+        temperature: f64,
+    },
+    TopKThenTopPThenMinP {
+        k: usize,
+        p: f64,
+        min_p: f64,
+        temperature: f64,
+    },
     // Note that the rng is not used for the Gumbel-Softmax sampling.
-    GumbelSoftmax { temperature: f64 },
+    GumbelSoftmax {
+        temperature: f64,
+    },
 }
 
 pub struct LogitsProcessor {
@@ -119,6 +153,46 @@ impl LogitsProcessor {
         }
     }
 
+    fn sample_minp(&mut self, prs: &mut Vec<f32>, min_p: f32) -> Result<u32> {
+        // Min-p sampling: remove tokens with probability below min_p * max_probability
+        if min_p <= 0.0 || min_p >= 1.0 {
+            return self.sample_multinomial(prs);
+        }
+
+        let max_prob = prs.iter().copied().fold(0.0f32, f32::max);
+        let threshold = min_p * max_prob;
+
+        for p in prs.iter_mut() {
+            if *p < threshold {
+                *p = 0.0;
+            }
+        }
+
+        self.sample_multinomial(prs)
+    }
+
+    fn sample_topk_minp(&mut self, prs: &mut Vec<f32>, k: usize, min_p: f32) -> Result<u32> {
+        self.sample_topk(prs, k)?;
+        self.sample_minp(prs, min_p)
+    }
+
+    fn sample_topp_minp(&mut self, prs: &mut Vec<f32>, p: f32, min_p: f32) -> Result<u32> {
+        self.sample_topp(prs, p)?;
+        self.sample_minp(prs, min_p)
+    }
+
+    fn sample_topk_topp_minp(
+        &mut self,
+        prs: &mut Vec<f32>,
+        k: usize,
+        p: f32,
+        min_p: f32,
+    ) -> Result<u32> {
+        self.sample_topk(prs, k)?;
+        self.sample_topp(prs, p)?;
+        self.sample_minp(prs, min_p)
+    }
+
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         self.sample_f(logits, |_| {})
     }
@@ -160,6 +234,35 @@ impl LogitsProcessor {
                 let mut prs = prs(*temperature)?;
                 self.sample_topk_topp(&mut prs, *k, *p as f32)?
             }
+            Sampling::MinP { min_p, temperature } => {
+                let mut prs = prs(*temperature)?;
+                self.sample_minp(&mut prs, *min_p as f32)?
+            }
+            Sampling::TopKThenMinP {
+                k,
+                min_p,
+                temperature,
+            } => {
+                let mut prs = prs(*temperature)?;
+                self.sample_topk_minp(&mut prs, *k, *min_p as f32)?
+            }
+            Sampling::TopPThenMinP {
+                p,
+                min_p,
+                temperature,
+            } => {
+                let mut prs = prs(*temperature)?;
+                self.sample_topp_minp(&mut prs, *p as f32, *min_p as f32)?
+            }
+            Sampling::TopKThenTopPThenMinP {
+                k,
+                p,
+                min_p,
+                temperature,
+            } => {
+                let mut prs = prs(*temperature)?;
+                self.sample_topk_topp_minp(&mut prs, *k, *p as f32, *min_p as f32)?
+            }
         };
         Ok(next_token)
     }
@@ -171,10 +274,29 @@ pub fn initialize_logits_processor(params: &GenerationParams, seed: u64) -> Logi
 
     let sampling = if params.temperature <= 0.0 {
         Sampling::ArgMax
+    } else if params.top_k > 0 && params.top_p < 1.0 && params.min_p > 0.0 {
+        Sampling::TopKThenTopPThenMinP {
+            k: params.top_k,
+            p: params.top_p,
+            min_p: params.min_p,
+            temperature,
+        }
     } else if params.top_k > 0 && params.top_p < 1.0 {
         Sampling::TopKThenTopP {
             k: params.top_k,
             p: params.top_p,
+            temperature,
+        }
+    } else if params.top_k > 0 && params.min_p > 0.0 {
+        Sampling::TopKThenMinP {
+            k: params.top_k,
+            min_p: params.min_p,
+            temperature,
+        }
+    } else if params.top_p < 1.0 && params.min_p > 0.0 {
+        Sampling::TopPThenMinP {
+            p: params.top_p,
+            min_p: params.min_p,
             temperature,
         }
     } else if params.top_k > 0 {
@@ -185,6 +307,11 @@ pub fn initialize_logits_processor(params: &GenerationParams, seed: u64) -> Logi
     } else if params.top_p < 1.0 {
         Sampling::TopP {
             p: params.top_p,
+            temperature,
+        }
+    } else if params.min_p > 0.0 {
+        Sampling::MinP {
+            min_p: params.min_p,
             temperature,
         }
     } else {
@@ -228,6 +355,7 @@ pub struct GenerationParams {
     pub max_len: usize,
     pub top_p: f64,   // 0.0..=1.0 ; 0 or 1 means disabled
     pub top_k: usize, // 0 means disabled
+    pub min_p: f64,   // 0.0..=1.0 ; 0 means disabled
 }
 
 impl GenerationParams {
@@ -239,6 +367,7 @@ impl GenerationParams {
         max_len: usize,
         top_p: f64,
         top_k: usize,
+        min_p: f64,
     ) -> Self {
         Self {
             temperature,
@@ -248,6 +377,7 @@ impl GenerationParams {
             max_len,
             top_p,
             top_k,
+            min_p,
         }
     }
 }

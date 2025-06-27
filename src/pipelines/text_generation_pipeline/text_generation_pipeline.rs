@@ -379,14 +379,70 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
             // Execute each tool call and append the tool response messages
             for tc in tool_calls {
-                let result = self
+                // Find the tool to get its error strategy and retry settings
+                let tool = self
                     .model
-                    .call_tool(tc.name.clone(), tc.arguments.clone())?;
+                    .registered_tools()
+                    .into_iter()
+                    .find(|t| t.name() == tc.name)
+                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
-                messages.push(crate::Message {
-                    role: "tool".to_string(),
-                    content: result,
-                });
+                let mut last_error = None;
+                let mut success = false;
+
+                // Retry loop
+                for attempt in 0..=tool.max_retries() {
+                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                        Ok(result) => {
+                            messages.push(crate::Message {
+                                role: "tool".to_string(),
+                                content: result,
+                            });
+                            success = true;
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+
+                            // If this isn't the last attempt, continue to retry
+                            if attempt < tool.max_retries() {
+                                // Add a small delay between retries
+                                std::thread::sleep(std::time::Duration::from_millis(
+                                    100 * (attempt + 1) as u64,
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Handle the final result after all retries
+                if !success {
+                    if let Some(e) = last_error {
+                        use crate::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy;
+                        match tool.error_strategy() {
+                            ErrorStrategy::Fail => {
+                                return Err(anyhow::anyhow!(
+                                    "Tool '{}' failed after {} attempts: {}",
+                                    tc.name,
+                                    tool.max_retries() + 1,
+                                    e
+                                ));
+                            }
+                            ErrorStrategy::ReturnToModel => {
+                                // Clean error message for the model (no retry mention)
+                                let error_message =
+                                    format!("Tool '{}' encountered an error: {}", tc.name, e);
+
+                                // Add clean message to model context (no retry info)
+                                messages.push(crate::Message {
+                                    role: "tool".to_string(),
+                                    content: error_message,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -429,14 +485,70 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
             // Execute each tool call and append the tool response messages
             for tc in tool_calls {
-                let result = self
+                // Find the tool to get its error strategy and retry settings
+                let tool = self
                     .model
-                    .call_tool(tc.name.clone(), tc.arguments.clone())?;
+                    .registered_tools()
+                    .into_iter()
+                    .find(|t| t.name() == tc.name)
+                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
-                messages.push(crate::Message {
-                    role: "tool".to_string(),
-                    content: result,
-                });
+                let mut last_error = None;
+                let mut success = false;
+
+                // Retry loop
+                for attempt in 0..=tool.max_retries() {
+                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                        Ok(result) => {
+                            messages.push(crate::Message {
+                                role: "tool".to_string(),
+                                content: result,
+                            });
+                            success = true;
+                            break;
+                        }
+                        Err(e) => {
+                            last_error = Some(e);
+
+                            // If this isn't the last attempt, continue to retry
+                            if attempt < tool.max_retries() {
+                                // Add a small delay between retries
+                                std::thread::sleep(std::time::Duration::from_millis(
+                                    100 * (attempt + 1) as u64,
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Handle the final result after all retries
+                if !success {
+                    if let Some(e) = last_error {
+                        use crate::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy;
+                        match tool.error_strategy() {
+                            ErrorStrategy::Fail => {
+                                return Err(anyhow::anyhow!(
+                                    "Tool '{}' failed after {} attempts: {}",
+                                    tc.name,
+                                    tool.max_retries() + 1,
+                                    e
+                                ));
+                            }
+                            ErrorStrategy::ReturnToModel => {
+                                // Clean error message for the model (no retry mention)
+                                let error_message =
+                                    format!("Tool '{}' encountered an error: {}", tc.name, e);
+
+                                // Add clean message to model context (no retry info)
+                                messages.push(crate::Message {
+                                    role: "tool".to_string(),
+                                    content: error_message,
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -511,19 +623,80 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                 // Execute tool calls (now self is not borrowed)
                 for tc in tool_calls {
-                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
-                        Ok(result) => {
-                            let tool_response = format!("\n\n<tool_response tool=\"{}\">\n{}\n</tool_response>\n\n", tc.name, result);
-                            yield tool_response;
-
-                            messages.push(crate::Message {
-                                role: "tool".to_string(),
-                                content: result,
-                            });
-                        }
-                        Err(e) => {
-                            yield format!("\nTool error for {}: {}", tc.name, e);
+                    // Find the tool to get its error strategy and retry settings
+                    let tool = match self.model.registered_tools()
+                        .into_iter()
+                        .find(|t| t.name() == tc.name) {
+                        Some(tool) => tool,
+                        None => {
+                            yield format!("\nError: Tool '{}' not found", tc.name);
                             return;
+                        }
+                    };
+
+                    let mut last_error = None;
+                    let mut success = false;
+                    let mut has_yielded_retry = false;
+
+                    // Retry loop
+                    for attempt in 0..=tool.max_retries() {
+                        match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                            Ok(result) => {
+                                let tool_response = format!("\n\n<tool_response tool=\"{}\">\n{}\n</tool_response>\n\n", tc.name, result);
+                                yield tool_response;
+
+                                messages.push(crate::Message {
+                                    role: "tool".to_string(),
+                                    content: result,
+                                });
+                                success = true;
+                                break;
+                            }
+                            Err(e) => {
+                                last_error = Some(e);
+
+                                // If this isn't the last attempt, show retry info to stream but continue
+                                if attempt < tool.max_retries() {
+                                    // Use double newlines for first retry, single for subsequent ones
+                                    let leading_newlines = if has_yielded_retry { "\n" } else { "\n\n" };
+                                    let retry_info = format!("{}<tool_error tool=\"{}\" attempt=\"{}\">\n{}\n</tool_error>\n",
+                                        leading_newlines, tc.name, attempt + 1, last_error.as_ref().unwrap());
+                                    yield retry_info;
+                                    has_yielded_retry = true;
+
+                                    // Add a small delay between retries
+                                    std::thread::sleep(std::time::Duration::from_millis(
+                                        100 * (attempt + 1) as u64,
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    // Handle the final result after all retries
+                    if !success {
+                        if let Some(e) = last_error {
+                            use crate::pipelines::text_generation_pipeline::text_generation_model::ErrorStrategy;
+                            match tool.error_strategy() {
+                                ErrorStrategy::Fail => {
+                                    yield format!("\nTool '{}' failed after {} attempts: {}", tc.name, tool.max_retries() + 1, e);
+                                    return;
+                                }
+                                ErrorStrategy::ReturnToModel => {
+                                    // Clean error message for the model (no retry mention)
+                                    let error_message = format!("Tool '{}' encountered an error: {}", tc.name, e);
+
+                                    // Add some spacing to prevent bleeding into model's next response
+                                    yield "\n".to_string();
+
+                                    // Add clean message to model context (no retry info)
+                                    messages.push(crate::Message {
+                                        role: "tool".to_string(),
+                                        content: error_message,
+                                    });
+                                }
+                            }
                         }
                     }
                 }

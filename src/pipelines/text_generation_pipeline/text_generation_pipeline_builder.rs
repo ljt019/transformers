@@ -14,6 +14,7 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     max_len: usize,
     top_p: f64,
     top_k: usize,
+    min_p: f64,
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
@@ -27,6 +28,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             max_len: 1024,
             top_p: 1.0,
             top_k: 0,
+            min_p: 0.0,
         }
     }
 
@@ -65,6 +67,11 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
+    pub fn min_p(mut self, min_p: f64) -> Self {
+        self.min_p = min_p.clamp(0.0, 1.0);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
@@ -83,6 +90,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
                 self.max_len,
                 self.top_p,
                 self.top_k,
+                self.min_p,
             );
 
         Ok(TextGenerationPipeline::new(model, gen_params)?)

@@ -1,31 +1,50 @@
 use anyhow::Result;
+use thiserror::Error;
 use transformers::pipelines::text_generation_pipeline::*;
 
-#[tool]
-/// Get the weather for a given city.
-fn get_weather(city: String) -> String {
-    println!("Debug: Getting weather for city: {}", city);
-    format!(
-        "Weather for city: {} - 20 degrees Celsius, sunny, and clear skies.",
-        city
-    )
+#[derive(Debug, Error)]
+pub enum WeatherError {
+    #[error("City '{city}' not found")]
+    CityNotFound { city: String },
+    #[error("Weather service temporarily unavailable")]
+    ServiceUnavailable,
 }
 
-fn main() -> Result<()> {
+#[tool(on_error = ErrorStrategy::ReturnToModel, retries = 3)]
+/// Get the weather for a given city.
+fn get_weather(city: String) -> Result<String, WeatherError> {
+    // Simulate some error conditions
+    if city.to_lowercase() == "japan" {
+        return Err(WeatherError::CityNotFound { city });
+    }
+
+    Ok(format!(
+        "Weather for city: {} - 20 degrees Celsius, sunny, and clear skies.",
+        city
+    ))
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("Building pipeline...");
 
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
-        .temperature(0.7)
-        .max_len(1000)
+    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size1_7B)
+        .temperature(0.6)
+        .top_p(0.95)
+        .top_k(20)
+        .min_p(0.0)
+        .max_len(2000)
         .build()?;
 
     pipeline.register_tools(tools![get_weather])?;
 
-    let generated_text = pipeline.prompt_completion_with_tools("Get the weather for Britain.")?;
+    let mut stream =
+        pipeline.prompt_completion_stream_with_tools("What's the weather like in Japan?")?;
 
-    println!("\n--- Generated Text---");
-    println!("{}", generated_text);
-    println!("--- End of Text---");
+    while let Some(tok) = stream.next().await {
+        print!("{}", tok);
+        std::io::stdout().flush().unwrap();
+    }
 
     Ok(())
 }

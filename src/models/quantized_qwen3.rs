@@ -995,13 +995,11 @@ impl ToolCalling for Qwen3Model {
         &mut self,
         tool_name: String,
         parameters: std::collections::HashMap<String, String>,
-    ) -> anyhow::Result<String> {
+    ) -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
-            Ok(tool.call(parameters))
+            tool.call(parameters)
         } else {
-            Err(anyhow::anyhow!(format!(
-                "Tool '{tool_name}' is not registered"
-            )))
+            Err(format!("Tool '{tool_name}' is not registered").into())
         }
     }
 }

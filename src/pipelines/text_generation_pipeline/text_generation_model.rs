@@ -1,6 +1,21 @@
 use crate::Message;
 use candle_core::Tensor;
 
+/// Strategy for handling tool errors.
+#[derive(Debug, Clone)]
+pub enum ErrorStrategy {
+    /// Stop execution and return the error (default behavior).
+    Fail,
+    /// Pass the error message to the model and let it decide how to respond.
+    ReturnToModel,
+}
+
+impl Default for ErrorStrategy {
+    fn default() -> Self {
+        Self::Fail
+    }
+}
+
 /// Minimal interface required by the text-generation pipeline for a model context.
 ///
 /// Both `Qwen3Model::Context` and `Gemma3Model::Context` already expose compatible
@@ -57,7 +72,7 @@ pub trait ToolCalling {
         &mut self,
         tool_name: String,
         parameters: std::collections::HashMap<String, String>,
-    ) -> anyhow::Result<String>;
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -67,7 +82,13 @@ pub struct Tool {
     pub(crate) description: String,
     pub(crate) parameters: std::collections::HashMap<String, String>,
     #[serde(skip_serializing)]
-    pub(crate) function: fn(parameters: std::collections::HashMap<String, String>) -> String,
+    pub(crate) function: fn(
+        parameters: std::collections::HashMap<String, String>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>,
+    #[serde(skip_serializing)]
+    pub(crate) error_strategy: ErrorStrategy,
+    #[serde(skip_serializing)]
+    pub(crate) max_retries: u32,
 }
 
 impl Tool {
@@ -76,13 +97,19 @@ impl Tool {
         name: String,
         description: String,
         parameters: std::collections::HashMap<String, String>,
-        function: fn(parameters: std::collections::HashMap<String, String>) -> String,
+        function: fn(
+            parameters: std::collections::HashMap<String, String>,
+        ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>,
+        error_strategy: ErrorStrategy,
+        max_retries: u32,
     ) -> Self {
         Self {
             name,
             description,
             parameters,
             function,
+            error_strategy,
+            max_retries,
         }
     }
 
@@ -91,8 +118,11 @@ impl Tool {
         &self.name
     }
 
-    /// Execute the tool with the given parameters, returning its string result.
-    pub fn call(&self, parameters: std::collections::HashMap<String, String>) -> String {
+    /// Execute the tool with the given parameters, returning its result.
+    pub fn call(
+        &self,
+        parameters: std::collections::HashMap<String, String>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         (self.function)(parameters)
     }
 
@@ -104,6 +134,16 @@ impl Tool {
     /// Get the description of the tool.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Get the error strategy for this tool.
+    pub fn error_strategy(&self) -> &ErrorStrategy {
+        &self.error_strategy
+    }
+
+    /// Get the maximum number of retries for this tool.
+    pub fn max_retries(&self) -> u32 {
+        self.max_retries
     }
 }
 
