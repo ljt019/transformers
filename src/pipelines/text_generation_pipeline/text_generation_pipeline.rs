@@ -40,7 +40,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let device = load_device()?;
 
         // Collect textual forms of special tokens for display filtering
-        let special_strings: std::collections::HashSet<String> = model_tokenizer
+        let mut special_strings: std::collections::HashSet<String> = model_tokenizer
             .get_added_tokens_decoder()
             .values()
             .filter(|tok| tok.special)
@@ -253,10 +253,17 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             generated_tokens.push(next_token);
         }
 
+        // Filter out EOS tokens before decoding
+        let eos_tokens = self.model.get_eos_tokens();
+        let filtered_tokens: Vec<u32> = generated_tokens
+            .into_iter()
+            .filter(|&token| !eos_tokens.contains(&token))
+            .collect();
+
         // Fast multi-token decode in a single call instead of per-token concat
         let generated_tokens_str = self
             .model_tokenizer
-            .decode(&generated_tokens, /*skip_special_tokens=*/ true)
+            .decode(&filtered_tokens, /*skip_special_tokens=*/ true)
             .unwrap();
 
         Ok(generated_tokens_str)
@@ -305,8 +312,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 
             // Incremental decode and pass full chunk downstream; callers
             // decide whether to hide special tokens.
-            if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
-                yield chunk;
+            // Skip yielding if this token is an EOS token
+            if !eos_tokens.contains(&next_token) {
+                if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                    yield chunk;
+                }
+            } else {
+                // Still need to step the decoder to keep state consistent, but don't yield
+                let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
             }
 
             // Autoregressive loop -----------------------------------------
@@ -335,8 +348,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 generated.push(next_token);
 
                 // ── incremental decode and yield ─────────────────────────
-                if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
-                    yield chunk;
+                // Skip yielding if this token is an EOS token
+                if !eos_tokens.contains(&next_token) {
+                    if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                        yield chunk;
+                    }
+                } else {
+                    // Still need to step the decoder to keep state consistent, but don't yield
+                    let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
                 }
             }
         })

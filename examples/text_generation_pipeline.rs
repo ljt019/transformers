@@ -1,39 +1,29 @@
 use anyhow::Result;
-use transformers::models::Qwen3Size;
 use transformers::pipelines::text_generation_pipeline::*;
 
 fn main() -> Result<()> {
     println!("Building pipeline...");
 
     // 1. Create the pipeline, using the builder to configure the model
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let mut pipeline = TextGenerationPipelineBuilder::gemma3(Gemma3Size::Size1B)
         .temperature(0.7)
-        .max_len(15)
+        .max_len(100)
         .build()?;
-
-    pipeline.set_reasoning(false)?;
 
     println!("Pipeline built successfully.");
 
-    // 2. Define prompt and max length
-    let prompt = "Explain the concept of Large Language Models in simple terms.";
-
-    println!("Generating text for prompt: '{}'", prompt);
-
     // 3. Generate text
-    let generated_text = pipeline.prompt_completion(prompt)?;
+    let generated_text = pipeline
+        .prompt_completion("Explain the concept of Large Language Models in simple terms.")?;
 
     println!("\n--- Generated Text ---");
     println!("{}", generated_text);
-    println!("--- End of Text ---\n");
 
-    let second_prompt = "Explain the fibonacci sequence in simple terms.";
-
-    let generated_text = pipeline.prompt_completion(second_prompt)?;
+    let generated_text =
+        pipeline.prompt_completion("Explain the fibonacci sequence in simple terms.")?;
 
     println!("\n--- Generated Text 2 ---");
     println!("{}", generated_text);
-    println!("--- End of Text 2 ---");
 
     Ok(())
 }

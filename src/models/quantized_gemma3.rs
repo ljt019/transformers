@@ -623,14 +623,51 @@ use tokenizers::Tokenizer;
 #[derive(Clone)]
 pub struct Gemma3Model {
     weights: Arc<ModelWeights>,
+    generation_config: crate::loaders::GenerationConfig,
+    chat_template_env: Arc<Environment<'static>>,
 }
 
 impl Gemma3Model {
+    /// Load and prepare the chat template environment
+    fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
+        // Load the tokenizer config and extract the chat template
+        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
+            "google/gemma-3-1b-it",
+            "tokenizer_config.json",
+        );
+
+        let tokenizer_config_path = tokenizer_config_loader.load()?;
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
+        let config_json: serde_json::Value = serde_json::from_str(&tokenizer_config_content)?;
+
+        let chat_template_str = config_json["chat_template"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
+
+        // Build the MiniJinja environment
+        let mut env = Environment::new();
+
+        // Leak the string to get 'static lifetime - this is fine since we're storing it in the model
+        let chat_template_static = Box::leak(chat_template_str.to_string().into_boxed_str());
+        env.add_template("chat", chat_template_static)?;
+
+        Ok(Arc::new(env))
+    }
     /// Load a Gemma3 model from a GGUF file.
-    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> Result<Self> {
+    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
-        Ok(Self { weights })
+        let generation_config = crate::loaders::GenerationConfigLoader::new(
+            "google/gemma-3-1b-it",
+            "generation_config.json",
+        )
+        .load()?;
+        let chat_template_env = Self::load_chat_template_env()?;
+        Ok(Self {
+            weights,
+            generation_config,
+            chat_template_env,
+        })
     }
 
     /// Load the model from hf
@@ -642,7 +679,17 @@ impl Gemma3Model {
         let (mut file, content) = model_loader.load()?;
 
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
-        Ok(Self { weights })
+        let generation_config = crate::loaders::GenerationConfigLoader::new(
+            "google/gemma-3-1b-it",
+            "generation_config.json",
+        )
+        .load()?;
+        let chat_template_env = Self::load_chat_template_env()?;
+        Ok(Self {
+            weights,
+            generation_config,
+            chat_template_env,
+        })
     }
 
     /// Get the models suggested tokenizer
@@ -907,51 +954,30 @@ impl TextGenerationModel for Gemma3Model {
     }
 
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
-        // Create a loader for the tokenizer config (using the 1B model's repo)
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "google/gemma-3-1b-it",
-            "tokenizer_config.json",
-        );
-
-        // Loads the tokenizer_config.json file
-        let tokenizer_config_path = tokenizer_config_loader
-            .load()
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer config: {}", e))?;
-        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read tokenizer config file: {}", e))?;
-
-        // Parse JSON and get the 'chat_template'
-        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse tokenizer config JSON: {}", e))?;
-        let chat_template = config_json["chat_template"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
-
-        // Create a minijinja environment
-        let mut env = Environment::new();
-        env.add_template("chat", chat_template)
-            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
-
-        let tmpl = env
-            .get_template("chat")
-            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
-
-        // Render the template
-        let rendered = tmpl
+        // Render the template using the pre-loaded environment
+        let rendered = self
+            .chat_template_env
+            .get_template("chat")?
             .render(context! {
                 messages => messages,
-                add_generation_prompt => true, // Common practice, adjust if needed
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
+                add_generation_prompt => true,
+            })?;
 
         Ok(rendered)
     }
 
     fn get_eos_token(&self) -> u32 {
-        let tokenizer = self.get_tokenizer().unwrap();
-        tokenizer
-            .token_to_id("<end_of_turn>")
-            .expect("<end_of_turn> token not found in vocab") as u32
+        // Return the first EOS token ID from the generation config
+        self.generation_config.eos_token_ids[0] as u32
+    }
+
+    fn get_eos_tokens(&self) -> Vec<u32> {
+        // Return all EOS token IDs for robust termination detection
+        self.generation_config
+            .eos_token_ids
+            .iter()
+            .map(|&id| id as u32)
+            .collect()
     }
 
     fn get_max_seq_len(&self) -> usize {
@@ -967,43 +993,3 @@ impl TextGenerationModel for Gemma3Model {
         Ok(())
     }
 }
-
-/*
-impl TextGenerationModel for Gemma3Model {
-    fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        // The tokenizer is the same for all sizes, so we can just use the 1B model
-        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
-
-        let tokenizer = tokenizer_loader.load()?;
-
-        Ok(tokenizer)
-    }
-
-    fn get_eos_token_str(&self) -> &str {
-        "<end_of_turn>"
-    }
-
-    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
-
-    }
-
-    fn format_prompt(&self, prompt: &str) -> String {
-        format!("<start_of_turn>user\n{prompt}<end_of_turn>\n<start_of_turn>assistant\n")
-    }
-
-    fn prompt_with_tokens(
-        &self,
-        prompt_tokens: &[u32],
-        max_len: usize,
-        eos_token: u32,
-    ) -> anyhow::Result<Vec<u32>> {
-        // TODO: proper streaming generation for Gemma3Model
-        Err(anyhow::anyhow!(
-            "prompt_with_tokens is not yet implemented for Gemma3Model"
-        ))
-    }
-}
-
-// Backward compatibility alias for old naming
-pub type QuantizedGemma3Model = Gemma3Model;
-*/

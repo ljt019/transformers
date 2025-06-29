@@ -33,6 +33,8 @@ async fn main() -> Result<()> {
         .max_len(8192)
         .build()?;
 
+    println!("Pipeline built successfully.");
+
     pipeline.register_tools(tools![get_temperature, get_humidity])?;
 
     let mut stream =
