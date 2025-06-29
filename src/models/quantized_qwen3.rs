@@ -19,6 +19,9 @@ use crate::models::RmsNorm;
 use candle_core::quantized::{gguf_file, QMatMul};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
+use minijinja::UndefinedBehavior;
+use minijinja::{context, Environment};
+use minijinja_contrib::{add_to_environment, pycompat};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -557,18 +560,75 @@ use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
 pub struct Qwen3Model {
     weights: Arc<ModelWeights>,
     reasoning: bool,
+    generation_config: crate::loaders::GenerationConfig,
     tools: Vec<crate::pipelines::text_generation_pipeline::text_generation_model::Tool>,
+    chat_template_env: Arc<Environment<'static>>,
 }
 
 impl Qwen3Model {
+    /// Load and prepare the chat template environment
+    fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
+        // Load the tokenizer config and extract the chat template
+        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
+            "Qwen/Qwen3-0.6B",
+            "tokenizer_config.json",
+        );
+
+        let tokenizer_config_path = tokenizer_config_loader.load()?;
+        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
+        let config_json: serde_json::Value = serde_json::from_str(&tokenizer_config_content)?;
+
+        let chat_template_str = config_json["chat_template"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
+
+        let mut chat_template_owned = chat_template_str.to_string();
+
+        // Replace Python list reverse slice with Jinja filter
+        chat_template_owned = chat_template_owned.replace("messages[::-1]", "messages|reverse");
+
+        // Patch known problematic arithmetic producing floats
+        chat_template_owned = chat_template_owned.replace(
+            "(messages|length - 1) - loop.index0",
+            "((messages|length - 1)|int - loop.index0|int)",
+        );
+
+        // Replace Python negative index access messages[-1] with explicit last element index
+        chat_template_owned =
+            chat_template_owned.replace("messages[-1]", "messages[(messages|length - 1)]");
+
+        // Build the MiniJinja environment with Python compatibility helpers
+        let mut env = Environment::new();
+        env.set_undefined_behavior(UndefinedBehavior::Lenient);
+
+        add_to_environment(&mut env);
+        env.set_unknown_method_callback(pycompat::unknown_method_callback);
+
+        // Ensure `tojson` filter is available (requires json feature)
+        env.add_filter("tojson", minijinja::filters::tojson);
+
+        // Leak the string to get 'static lifetime - this is fine since we're storing it in the model
+        let chat_template_static = Box::leak(chat_template_owned.into_boxed_str());
+        env.add_template("chat", chat_template_static)?;
+
+        Ok(Arc::new(env))
+    }
     /// Load a Qwen3 model from a GGUF file.
-    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> Result<Self> {
+    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
+        let generation_config = crate::loaders::GenerationConfigLoader::new(
+            "Qwen/Qwen3-0.6B",
+            "generation_config.json",
+        )
+        .load()?;
+        let chat_template_env = Self::load_chat_template_env()?;
         Ok(Self {
             weights,
             reasoning: true,
+            generation_config,
             tools: Vec::new(),
+            chat_template_env,
         })
     }
 
@@ -580,11 +640,21 @@ impl Qwen3Model {
         let model_loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = model_loader.load()?;
 
+        // Download the tokenizer config from hf to get the eos token id
+        let generation_config = crate::loaders::GenerationConfigLoader::new(
+            "Qwen/Qwen3-0.6B",
+            "generation_config.json",
+        )
+        .load()?;
+
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
+        let chat_template_env = Self::load_chat_template_env()?;
         Ok(Self {
             weights,
             reasoning: true,
+            generation_config,
             tools: Vec::new(),
+            chat_template_env,
         })
     }
 
@@ -756,7 +826,6 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
-use minijinja::{context, Environment};
 use serde_json::Value;
 
 impl LanguageModelContext for Context {
@@ -784,10 +853,17 @@ impl TextGenerationModel for Qwen3Model {
     type Options = Qwen3Size;
 
     fn get_eos_token(&self) -> u32 {
-        self.get_tokenizer()
-            .unwrap()
-            .token_to_id("<|im_end|>")
-            .expect("<|im_end|> token not in vocab") as u32
+        // Return the first EOS token ID from the generation config
+        self.generation_config.eos_token_ids[0] as u32
+    }
+
+    fn get_eos_tokens(&self) -> Vec<u32> {
+        // Return all EOS token IDs for robust termination detection
+        self.generation_config
+            .eos_token_ids
+            .iter()
+            .map(|&id| id as u32)
+            .collect()
     }
 
     fn get_max_seq_len(&self) -> usize {
@@ -803,10 +879,8 @@ impl TextGenerationModel for Qwen3Model {
     }
 
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
-        // Determine thinking mode: check for /think or /no_think in the last user message
-        let mut enable_thinking = self.reasoning; // Default to model's reasoning flag
-
-        // Check the last user message for soft switches
+        // Determine thinking mode
+        let mut enable_thinking = self.reasoning;
         if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == "user") {
             let content = last_user_msg.content();
             if content.contains("/think") {
@@ -816,120 +890,11 @@ impl TextGenerationModel for Qwen3Model {
             }
         }
 
-        // Create a loader for the tokenizer config
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "Qwen/Qwen3-0.6B",
-            "tokenizer_config.json",
-        );
-
-        // Loads the tokenizer_config.json file and returns the path to the json file as a PathBuf
-        let tokenizer_config_path = tokenizer_config_loader
-            .load()
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer config: {}", e))?;
-        let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)
-            .map_err(|e| anyhow::anyhow!("Failed to read tokenizer config: {}", e))?;
-
-        // Parse JSON and get the 'chat_template'
-        let config_json: Value = serde_json::from_str(&tokenizer_config_content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse tokenizer config: {}", e))?;
-        let mut chat_template_str = config_json["chat_template"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?
-            .to_string();
-
-        // Perform targeted template fixes:
-        // 1) Reverse list usage messages[::-1] -> messages|reverse
-        chat_template_str = chat_template_str.replace("messages[::-1]", "messages|reverse");
-
-        // 2) Convert Python method calls .startswith and .endswith to Jinja tests
-        chat_template_str = chat_template_str.replace(
-            ".startswith('<tool_response>')",
-            " is startingwith \"<tool_response>\"",
-        );
-        chat_template_str = chat_template_str.replace(
-            ".endswith('</tool_response>')",
-            " is endingwith \"<tool_response>\"",
-        );
-
-        // 3) Targeted fixes for known problematic lines based on the debug output of chat_template_str
-
-        // Fixing: {%- set content = message.content.split('</think>')[-1].lstrip('\n') %}
-        chat_template_str = chat_template_str.replace(
-            "{%- set content = message.content.split('</think>')[-1].lstrip('\\n') %}",
-            "{%- set content = lstrip(last(split(message.content, \"</think>\")), \"\\n\") %}",
-        );
-
-        // Fixing: {%- set reasoning_content = message.content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-        chat_template_str = chat_template_str.replace(
-            "{%- set reasoning_content = message.content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}",
-            "{%- set reasoning_content = lstrip(last(split(rstrip(first(split(message.content, \"</think>\")), \"\\n\"), \"<think>\")), \"\\n\") %}"
-        );
-
-        // Fixing: reasoning_content.strip('\n') within the assistant message block
-        chat_template_str = chat_template_str.replace(
-            "reasoning_content.strip('\\n')",
-            "strip(reasoning_content, '\\n')",
-        );
-
-        // Fixing: content.lstrip('\n') at the end of the assistant message block
-        chat_template_str =
-            chat_template_str.replace("+ content.lstrip('\\n') }}", "+ lstrip(content, '\\n') }}");
-
-        // Create a minijinja environment
-        let mut env = Environment::new();
-
-        // Register filters and tests for string operations
-        // Qwen3 is the only model i've had to do this with so for, it's weird
-        // It's jinja template just has weird pythonic stuff in it
-        env.add_test("startingwith", |value: &str, prefix: &str| {
-            value.starts_with(prefix)
-        });
-        env.add_test("endingwith", |value: &str, suffix: &str| {
-            value.ends_with(suffix)
-        });
-        env.add_function("split", |v: String, sep: String| -> Vec<String> {
-            v.split(&sep).map(String::from).collect()
-        });
-        env.add_function("first", |v: Vec<String>| -> String {
-            v.first().cloned().unwrap_or_default()
-        });
-        env.add_function("last", |v: Vec<String>| -> String {
-            v.last().cloned().unwrap_or_default()
-        });
-        env.add_function("lstrip", |s: String, pat: String| -> String {
-            let c = pat.chars().next().unwrap_or('\0'); // Get first char or null
-            s.trim_start_matches(c).to_string()
-        });
-        env.add_function("rstrip", |s: String, pat: String| -> String {
-            let c = pat.chars().next().unwrap_or('\0');
-            s.trim_end_matches(c).to_string()
-        });
-        env.add_function("strip", |s: String, pat: String| -> String {
-            let c = pat.chars().next().unwrap_or('\0');
-            s.trim_matches(c).to_string()
-        });
-
-        // Add a filter to serialize values to JSON (used by the chat template).
-        env.add_filter("tojson", |value: minijinja::value::Value| -> String {
-            serde_json::to_string(&value).unwrap_or_default()
-        });
-
-        // Add the patched template
-        env.add_template("chat", &chat_template_str)
-            .map_err(|e| anyhow::anyhow!("Failed to add chat template: {}", e))?;
-
-        // Get the template
-        let tmpl = env
-            .get_template("chat")
-            .map_err(|e| anyhow::anyhow!("Failed to get chat template: {}", e))?;
-
-        // Convert messages to a format that works better with Jinja2
-        // Also clean up /think and /no_think from user messages for template rendering
+        // Prepare messages (strip /think flags from user content)
         let messages_dicts: Vec<serde_json::Value> = messages
-            .into_iter()
+            .iter()
             .map(|msg| {
                 let mut content = msg.content().to_string();
-                // Remove /think and /no_think from user messages for cleaner output
                 if msg.role() == "user" {
                     content = content
                         .replace("/think", "")
@@ -944,15 +909,16 @@ impl TextGenerationModel for Qwen3Model {
             })
             .collect();
 
-        // Render the template
-        let rendered = tmpl
+        // Render the template using the pre-loaded environment
+        let rendered = self
+            .chat_template_env
+            .get_template("chat")?
             .render(context! {
                 messages => messages_dicts,
                 add_generation_prompt => true,
                 enable_thinking => enable_thinking,
                 tools => self.registered_tools(),
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to render chat template: {}", e))?;
+            })?;
 
         Ok(rendered)
     }
@@ -975,6 +941,7 @@ impl ToggleableReasoning for Qwen3Model {
 }
 
 use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
+use crate::pipelines::text_generation_pipeline::tool_error::ToolError;
 
 impl ToolCalling for Qwen3Model {
     fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {
@@ -995,11 +962,13 @@ impl ToolCalling for Qwen3Model {
         &mut self,
         tool_name: String,
         parameters: std::collections::HashMap<String, String>,
-    ) -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> std::result::Result<String, ToolError> {
         if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
             tool.call(parameters)
         } else {
-            Err(format!("Tool '{tool_name}' is not registered").into())
+            Err(ToolError::Message(format!(
+                "Tool '{tool_name}' is not registered"
+            )))
         }
     }
 }

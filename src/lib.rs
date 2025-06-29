@@ -4,6 +4,7 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
+mod loaders;
 pub mod models;
 pub mod pipelines;
 

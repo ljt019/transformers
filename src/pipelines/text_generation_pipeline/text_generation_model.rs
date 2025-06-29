@@ -1,3 +1,4 @@
+use super::tool_error::ToolError;
 use crate::Message;
 use candle_core::Tensor;
 
@@ -52,6 +53,11 @@ pub trait TextGenerationModel {
 
     fn get_eos_token(&self) -> u32;
 
+    /// Get all EOS token IDs for robust termination detection
+    fn get_eos_tokens(&self) -> Vec<u32> {
+        vec![self.get_eos_token()]
+    }
+
     fn get_max_seq_len(&self) -> usize;
 
     fn new_context(&self) -> Self::Context;
@@ -72,7 +78,7 @@ pub trait ToolCalling {
         &mut self,
         tool_name: String,
         parameters: std::collections::HashMap<String, String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<String, ToolError>;
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -82,9 +88,8 @@ pub struct Tool {
     pub(crate) description: String,
     pub(crate) parameters: std::collections::HashMap<String, String>,
     #[serde(skip_serializing)]
-    pub(crate) function: fn(
-        parameters: std::collections::HashMap<String, String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>,
+    pub(crate) function:
+        fn(parameters: std::collections::HashMap<String, String>) -> Result<String, ToolError>,
     #[serde(skip_serializing)]
     pub(crate) error_strategy: ErrorStrategy,
     #[serde(skip_serializing)]
@@ -99,7 +104,7 @@ impl Tool {
         parameters: std::collections::HashMap<String, String>,
         function: fn(
             parameters: std::collections::HashMap<String, String>,
-        ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>,
+        ) -> Result<String, ToolError>,
         error_strategy: ErrorStrategy,
         max_retries: u32,
     ) -> Self {
@@ -122,7 +127,7 @@ impl Tool {
     pub fn call(
         &self,
         parameters: std::collections::HashMap<String, String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<String, ToolError> {
         (self.function)(parameters)
     }
 

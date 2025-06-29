@@ -1,7 +1,6 @@
 use anyhow::Result;
 use transformers::models::Qwen3Size;
 use transformers::pipelines::text_generation_pipeline::*;
-use transformers::prelude::*;
 
 fn main() -> Result<()> {
     println!("Building pipeline...");

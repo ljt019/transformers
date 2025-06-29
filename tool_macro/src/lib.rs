@@ -194,12 +194,13 @@ pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
     let wrapper_body = if is_result {
         quote! {
             #( #extraction_stmts )*
+            use transformers::pipelines::text_generation_pipeline::tool_error::ToolError;
             let result = #fn_name_ident( #(#call_args),* );
 
             // Convert the result to the expected type
             match result {
                 Ok(s) => Ok(s),
-                Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>),
+                Err(e) => Err(ToolError::Message(e.to_string())),
             }
         }
     } else {
@@ -217,7 +218,7 @@ pub fn tool(args: TokenStream, item: TokenStream) -> TokenStream {
 
         // Automatically generated wrapper that matches the `Tool` function signature.
         #[doc(hidden)]
-        fn #wrapper_name(mut parameters: std::collections::HashMap<String, String>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        fn #wrapper_name(mut parameters: std::collections::HashMap<String, String>) -> Result<String, transformers::pipelines::text_generation_pipeline::tool_error::ToolError> {
             #wrapper_body
         }
 

@@ -1,45 +1,42 @@
 use anyhow::Result;
-use thiserror::Error;
+use transformers::pipelines::text_generation_pipeline::ToolError;
 use transformers::pipelines::text_generation_pipeline::*;
 
-#[derive(Debug, Error)]
-pub enum WeatherError {
-    #[error("City '{city}' not found")]
-    CityNotFound { city: String },
-    #[error("Weather service temporarily unavailable")]
-    ServiceUnavailable,
+#[tool(on_error = ErrorStrategy::Fail, retries = 5)]
+/// Get the weather for a given city.
+fn get_humidity(city: String) -> Result<String, ToolError> {
+    Ok(format!("The humidity is 1% in {}.", city))
 }
 
-#[tool(on_error = ErrorStrategy::ReturnToModel, retries = 3)]
-/// Get the weather for a given city.
-fn get_weather(city: String) -> Result<String, WeatherError> {
-    // Simulate some error conditions
-    if city.to_lowercase() == "japan" {
-        return Err(WeatherError::CityNotFound { city });
-    }
+/*
+    defaults to 3 retries, and ReturnToModel error strategy
+*/
 
-    Ok(format!(
-        "Weather for city: {} - 20 degrees Celsius, sunny, and clear skies.",
+#[tool]
+/// Get the weather for a given city in degrees celsius.
+fn get_temperature(city: String) -> Result<String, ToolError> {
+    return Ok(format!(
+        "The temperature is 20 degrees celsius in {}.",
         city
-    ))
+    ));
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Building pipeline...");
 
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size1_7B)
+    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .temperature(0.6)
         .top_p(0.95)
         .top_k(20)
         .min_p(0.0)
-        .max_len(2000)
+        .max_len(8192)
         .build()?;
 
-    pipeline.register_tools(tools![get_weather])?;
+    pipeline.register_tools(tools![get_temperature, get_humidity])?;
 
     let mut stream =
-        pipeline.prompt_completion_stream_with_tools("What's the weather like in Japan?")?;
+        pipeline.prompt_completion_stream_with_tools("What's the weather like in Tokyo?")?;
 
     while let Some(tok) = stream.next().await {
         print!("{}", tok);

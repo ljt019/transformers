@@ -1,6 +1,7 @@
 pub mod text_generation_model;
 pub mod text_generation_pipeline;
 pub mod text_generation_pipeline_builder;
+pub mod tool_error;
 
 pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 
@@ -29,6 +30,8 @@ pub use anyhow::Result;
 
 // Re-export std::io::Write for flushing stdout in examples
 pub use std::io::Write;
+
+pub use tool_error::ToolError;
 
 #[macro_export]
 macro_rules! tools {

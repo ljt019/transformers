@@ -17,6 +17,7 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
     gen_params: GenerationParams,
     device: candle_core::Device,
     last_processed_tokens: Vec<u32>,
+    special_strings: std::collections::HashSet<String>,
 }
 
 use async_stream::try_stream;
@@ -38,6 +39,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let context = model.new_context();
         let device = load_device()?;
 
+        // Collect textual forms of special tokens for display filtering
+        let special_strings: std::collections::HashSet<String> = model_tokenizer
+            .get_added_tokens_decoder()
+            .values()
+            .filter(|tok| tok.special)
+            .map(|tok| tok.content.clone())
+            .collect();
+
         Ok(Self {
             model,
             model_tokenizer,
@@ -45,6 +54,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             gen_params,
             device,
             last_processed_tokens: Vec::new(),
+            special_strings,
         })
     }
 
@@ -218,8 +228,9 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         generated_tokens.push(next_token);
 
         // Generate autoregressively
+        let eos_tokens = self.model.get_eos_tokens();
         for _ in 0..self.gen_params.max_len {
-            if next_token == self.model.get_eos_token() {
+            if eos_tokens.contains(&next_token) {
                 break;
             }
 
@@ -242,11 +253,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             generated_tokens.push(next_token);
         }
 
-        let generated_tokens_str = generated_tokens
-            .iter()
-            .map(|t| self.model_tokenizer.decode(&[*t], true).unwrap())
-            .collect::<Vec<String>>()
-            .join("");
+        // Fast multi-token decode in a single call instead of per-token concat
+        let generated_tokens_str = self
+            .model_tokenizer
+            .decode(&generated_tokens, /*skip_special_tokens=*/ true)
+            .unwrap();
 
         Ok(generated_tokens_str)
     }
@@ -258,7 +269,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         // Capture everything the async generator needs **by value** so
         // nothing is moved out of &mut self after we return.
         let device = self.device.clone();
-        let eos_token = self.model.get_eos_token();
+        let eos_tokens = self.model.get_eos_tokens();
         let tokenizer = self.model_tokenizer.clone();
         let context = &mut self.context; // still lives inside self
         let params = self.gen_params.clone();
@@ -284,13 +295,23 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 
             // First sampled token -----------------------------------------
             let mut generated: Vec<u32> = Vec::with_capacity(params.max_len);
+
+            // Incremental decoder that keeps special tokens; user-side
+            // filtering (if desired) is handled in higher-level helpers.
+            let mut dec_full  = tokenizer.decode_stream(false);
+
             let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
             generated.push(next_token);
-            yield tokenizer.decode(&[next_token], true).unwrap();
+
+            // Incremental decode and pass full chunk downstream; callers
+            // decide whether to hide special tokens.
+            if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                yield chunk;
+            }
 
             // Autoregressive loop -----------------------------------------
             for _ in 0..params.max_len {
-                if next_token == eos_token {
+                if eos_tokens.contains(&next_token) {
                     break;
                 }
 
@@ -313,8 +334,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 next_token = logits_processor.sample(&logits)?;
                 generated.push(next_token);
 
-                // ── yield to the caller ───────────────────────────────────
-                yield tokenizer.decode(&[next_token], true).unwrap();
+                // ── incremental decode and yield ─────────────────────────
+                if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                    yield chunk;
+                }
             }
         })
     }
@@ -582,6 +605,8 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         // then continue. This avoids the complex async stream with self capture.
         let mut messages = messages.to_vec();
 
+        let special_strings = self.special_strings.clone();
+
         Ok(Box::pin(stream! {
             const MAX_TOOL_ITERATIONS: usize = 8;
 
@@ -598,8 +623,16 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                     let mut acc = String::new();
                     while let Some(token) = response_stream.next().await {
+                        // Always add to the accumulator so our internal chat
+                        // history keeps the *full* text, including the
+                        // special delimiter tokens such as <|im_end|> that the
+                        // chat template relies on.
                         acc.push_str(&token);
-                        yield token;
+
+                        // Hide tokenizer-declared special tokens from user output
+                        if !special_strings.contains(&token) {
+                            yield token;
+                        }
                     }
                     acc
                 }; // response_stream is dropped here, releasing the borrow
@@ -622,7 +655,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 messages.push(crate::Message::assistant(&accumulated));
 
                 // Execute tool calls (now self is not borrowed)
-                for tc in tool_calls {
+                let mut is_first_tool = true;
+                let total_tools = tool_calls.len();
+                for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                     // Find the tool to get its error strategy and retry settings
                     let tool = match self.model.registered_tools()
                         .into_iter()
@@ -642,7 +677,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                     for attempt in 0..=tool.max_retries() {
                         match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
                             Ok(result) => {
-                                let tool_response = format!("\n\n<tool_response tool=\"{}\">\n{}\n</tool_response>\n\n", tc.name, result);
+                                // Use double newlines for first tool, single for subsequent ones
+                                let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
+                                // Always end with single newline, but add extra newline only for the last tool
+                                let trailing_newlines = if tool_index == total_tools - 1 { "\n\n" } else { "\n" };
+                                let tool_response = format!("{}<tool_response tool=\"{}\">\n{}\n</tool_response>{}", leading_newlines, tc.name, result, trailing_newlines);
                                 yield tool_response;
 
                                 messages.push(crate::Message {
@@ -650,6 +689,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                     content: result,
                                 });
                                 success = true;
+                                is_first_tool = false;
                                 break;
                             }
                             Err(e) => {
