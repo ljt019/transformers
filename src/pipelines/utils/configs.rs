@@ -1,7 +1,7 @@
 use candle_core::Device;
 
 use super::load_device;
-use crate::models::raw::generation::GenerationParams;
+use crate::models::generation::GenerationParams;
 
 #[derive(Clone)]
 pub struct ModelConfig {
