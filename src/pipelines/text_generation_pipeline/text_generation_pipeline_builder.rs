@@ -7,68 +7,68 @@ use super::text_generation_pipeline::TextGenerationPipeline;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
-    temperature: f64,
-    repeat_penalty: f32,
-    repeat_last_n: usize,
-    seed: u64,
-    max_len: usize,
-    top_p: f64,
-    top_k: usize,
-    min_p: f64,
+    temperature: Option<f64>,
+    repeat_penalty: Option<f32>,
+    repeat_last_n: Option<usize>,
+    seed: Option<u64>,
+    max_len: Option<usize>,
+    top_p: Option<f64>,
+    top_k: Option<usize>,
+    min_p: Option<f64>,
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
     pub fn new(options: M::Options) -> Self {
         Self {
             model_options: options,
-            temperature: 0.7,
-            repeat_penalty: 1.0,
-            repeat_last_n: 64,
-            seed: 42,
-            max_len: 1024,
-            top_p: 1.0,
-            top_k: 0,
-            min_p: 0.0,
+            temperature: None,
+            repeat_penalty: None,
+            repeat_last_n: None,
+            seed: None,
+            max_len: None,
+            top_p: None,
+            top_k: None,
+            min_p: None,
         }
     }
 
     pub fn temperature(mut self, temperature: f64) -> Self {
-        self.temperature = temperature;
+        self.temperature = Some(temperature);
         self
     }
 
     pub fn repeat_penalty(mut self, repeat_penalty: f32) -> Self {
-        self.repeat_penalty = repeat_penalty;
+        self.repeat_penalty = Some(repeat_penalty);
         self
     }
 
     pub fn repeat_last_n(mut self, repeat_last_n: usize) -> Self {
-        self.repeat_last_n = repeat_last_n;
+        self.repeat_last_n = Some(repeat_last_n);
         self
     }
 
     pub fn seed(mut self, seed: u64) -> Self {
-        self.seed = seed;
+        self.seed = Some(seed);
         self
     }
 
     pub fn max_len(mut self, max_len: usize) -> Self {
-        self.max_len = max_len;
+        self.max_len = Some(max_len);
         self
     }
 
     pub fn top_p(mut self, top_p: f64) -> Self {
-        self.top_p = top_p.clamp(0.0, 1.0);
+        self.top_p = Some(top_p.clamp(0.0, 1.0));
         self
     }
 
     pub fn top_k(mut self, top_k: usize) -> Self {
-        self.top_k = top_k;
+        self.top_k = Some(top_k);
         self
     }
 
     pub fn min_p(mut self, min_p: f64) -> Self {
-        self.min_p = min_p.clamp(0.0, 1.0);
+        self.min_p = Some(min_p.clamp(0.0, 1.0));
         self
     }
 
@@ -81,17 +81,20 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         let cache_key = format!("{}", self.model_options);
         let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
 
-        let gen_params: crate::models::generation::GenerationParams =
-            crate::models::generation::GenerationParams::new(
-                self.temperature,
-                1.0,
-                64,
-                42,
-                self.max_len,
-                self.top_p,
-                self.top_k,
-                self.min_p,
-            );
+        // Start with model-specific defaults
+        let default_params = model.default_generation_params();
+
+        // Override with any user-specified values
+        let gen_params = crate::models::generation::GenerationParams::new(
+            self.temperature.unwrap_or(default_params.temperature),
+            self.repeat_penalty.unwrap_or(default_params.repeat_penalty),
+            self.repeat_last_n.unwrap_or(default_params.repeat_last_n),
+            self.seed.unwrap_or_else(|| rand::random::<u64>()),
+            self.max_len.unwrap_or(default_params.max_len),
+            self.top_p.unwrap_or(default_params.top_p),
+            self.top_k.unwrap_or(default_params.top_k),
+            self.min_p.unwrap_or(default_params.min_p),
+        );
 
         Ok(TextGenerationPipeline::new(model, gen_params)?)
     }

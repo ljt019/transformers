@@ -6,7 +6,6 @@ async fn main() -> Result<()> {
 
     // 1. Create the pipeline, using the builder to configure the model
     let mut pipeline = TextGenerationPipelineBuilder::gemma3(Gemma3Size::Size1B)
-        .temperature(0.7)
         .max_len(8192)
         .build()?;
 

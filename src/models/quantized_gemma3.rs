@@ -992,4 +992,19 @@ impl TextGenerationModel for Gemma3Model {
         context.reset();
         Ok(())
     }
+
+    fn default_generation_params(&self) -> crate::models::generation::GenerationParams {
+        // Recommended Gemma3 inference settings (confirmed with HF team)
+        crate::models::generation::GenerationParams {
+            temperature: self.generation_config.temperature.unwrap_or(1.0),
+            repeat_penalty: self.generation_config.repeat_penalty.unwrap_or(1.15),
+            repeat_last_n: self.generation_config.repeat_last_n.unwrap_or(64),
+            seed: 42,
+            // Gemma3 supports very long context, but keep a sane default
+            max_len: 8192,
+            top_p: self.generation_config.top_p.unwrap_or(0.95),
+            top_k: self.generation_config.top_k.unwrap_or(64) as usize,
+            min_p: self.generation_config.min_p.unwrap_or(0.0),
+        }
+    }
 }
