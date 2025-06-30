@@ -50,6 +50,7 @@ Transformers provides a simple, intuitive interface for Rust developers who want
 - [ModernBERT-zeroshot](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0)
   - Base
   - Large
+All ModernBERT-based pipelines share the same backbone architecture while loading task-specific finetuned checkpoints.
 
 ## Installation
 

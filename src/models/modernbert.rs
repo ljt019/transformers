@@ -626,6 +626,112 @@ use anyhow::{Error as E, Result as AnyhowResult};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+/// Available ModernBERT model sizes used for tasks like fill-mask.
+#[derive(Debug, Clone, Copy)]
+pub enum ModernBertSize {
+    Base,
+    Large,
+}
+
+/// Fill-mask model using ModernBERT.
+#[derive(Clone)]
+pub struct FillMaskModernBertModel {
+    model: ModernBertForMaskedLM,
+    device: Device,
+}
+
+impl FillMaskModernBertModel {
+    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
+        let device = load_device()?;
+        let model_id = match size {
+            ModernBertSize::Base => "answerdotai/ModernBERT-base".to_string(),
+            ModernBertSize::Large => "answerdotai/ModernBERT-large".to_string(),
+        };
+
+        let api = Api::new()?;
+        let repo = api.repo(Repo::new(model_id.clone(), RepoType::Model));
+
+        let config_filename = repo.get("config.json")?;
+        let weights_filename = match repo.get("model.safetensors") {
+            Ok(sf) => sf,
+            Err(_) => match repo.get("pytorch_model.bin") {
+                Ok(pb) => pb,
+                Err(e) => {
+                    anyhow::bail!(
+                        "Model weights not found in repo {}. Expected `model.safetensors` or `pytorch_model.bin`. Error: {e}",
+                        model_id
+                    )
+                }
+            },
+        };
+
+        let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
+            E::msg(format!("Failed to read config file {:?}: {}", config_filename, e))
+        })?;
+        let config: Config = serde_json::from_str(&config_content)
+            .map_err(|e| E::msg(format!("Failed to parse model config: {}", e)))?;
+
+        let dtype = DType::F32;
+        let vb = if weights_filename.extension().map_or(false, |ext| ext == "safetensors") {
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device)? }
+        } else if weights_filename.extension().map_or(false, |ext| ext == "bin") {
+            VarBuilder::from_pth(&weights_filename, dtype, &device)?
+        } else {
+            anyhow::bail!("Unsupported weight file format: {:?}", weights_filename);
+        };
+
+        let model = ModernBertForMaskedLM::load(vb, &config)?;
+
+        Ok(Self { model, device })
+    }
+
+    pub fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
+        let encoding = tokenizer
+            .encode(text, true)
+            .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
+        let mask_id = tokenizer.token_to_id("[MASK]").unwrap_or(103);
+        let mask_index = encoding
+            .get_ids()
+            .iter()
+            .position(|&id| id == mask_id)
+            .ok_or_else(|| E::msg("No [MASK] token found in input"))?;
+
+        let attention: Vec<u32> = vec![1; encoding.len()];
+
+        let input_ids = Tensor::new(encoding.get_ids(), &self.device)?.unsqueeze(0)?;
+        let attention_mask = Tensor::new(attention.as_slice(), &self.device)?.unsqueeze(0)?;
+        let logits = self.model.forward(&input_ids, &attention_mask)?;
+        let logits = logits.squeeze(0)?.i((mask_index, ..))?;
+        let probs = softmax(&logits, D::Minus1)?;
+        let probs_v = probs.to_vec1::<f32>()?;
+        let predicted = probs_v
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i as u32)
+            .unwrap();
+        let token_str = tokenizer.decode(&[predicted], true).unwrap_or_default();
+        Ok(text.replace("[MASK]", &token_str))
+    }
+
+    pub fn get_tokenizer_repo_info(size: ModernBertSize) -> String {
+        match size {
+            ModernBertSize::Base => "answerdotai/ModernBERT-base".to_string(),
+            ModernBertSize::Large => "answerdotai/ModernBERT-large".to_string(),
+        }
+    }
+
+    pub fn get_tokenizer(&self, size: ModernBertSize) -> AnyhowResult<Tokenizer> {
+        let repo_id = Self::get_tokenizer_repo_info(size);
+        let api = Api::new()?;
+        let repo = api.repo(Repo::new(repo_id, RepoType::Model));
+        let tokenizer_filename = repo.get("tokenizer.json")?;
+
+        Tokenizer::from_file(tokenizer_filename)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
+    }
+}
+
 /// Available sizes of the zero-shot ModernBERT model
 #[derive(Debug, Clone, Copy)]
 pub enum ZeroShotModernBertSize {
@@ -634,6 +740,7 @@ pub enum ZeroShotModernBertSize {
 }
 
 /// Zero-shot classification model using ModernBERT
+#[derive(Clone)]
 pub struct ZeroShotModernBertModel {
     model: ModernBertForSequenceClassification,
     device: Device,
@@ -843,6 +950,7 @@ pub enum SentimentModernBertSize {
 }
 
 /// Sentiment analysis model using ModernBERT
+#[derive(Clone)]
 pub struct SentimentModernBertModel {
     model: ModernBertForSequenceClassification,
     device: Device,
