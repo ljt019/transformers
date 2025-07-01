@@ -4,7 +4,7 @@ use transformers::pipelines::text_generation_pipeline::*;
 fn main() -> Result<()> {
     // Start by creating the pipeline, using the builder to configure any generation parameters.
     // Parameters are optional, defaults are set to good values for each model.
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .temperature(0.7)
         .top_k(40)
         .max_len(1024)

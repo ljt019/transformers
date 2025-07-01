@@ -4,7 +4,7 @@ use transformers::pipelines::text_generation_pipeline::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Start by creating the pipeline, using the builder to configure any generation parameters.
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
         .build()?;
 
@@ -24,10 +24,10 @@ async fn main() -> Result<()> {
         Message::user("What is the capital of France?"),
     ];
 
-    let mut stream = pipeline.message_completion_stream(&messages)?;
+    let mut stream_two = pipeline.message_completion_stream(&messages)?;
 
     println!("\n--- Generated Text 2 ---");
-    while let Some(tok) = stream.next().await {
+    while let Some(tok) = stream_two.next().await {
         print!("{}", tok);
         std::io::stdout().flush().unwrap();
     }
