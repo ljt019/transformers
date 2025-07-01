@@ -5,7 +5,7 @@ on:
     types:
       - opened
     branches:
-      - development
+      - dev
 
 
 jobs:
