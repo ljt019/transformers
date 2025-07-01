@@ -1,20 +1,29 @@
+use super::zero_shot_classification_model::ZeroShotClassificationModel;
 use super::zero_shot_classification_pipeline::ZeroShotClassificationPipeline;
-use crate::models::modernbert::{ZeroShotModernBertModel, ZeroShotModernBertSize};
 use crate::pipelines::utils::model_cache::global_cache;
 
-pub struct ZeroShotClassificationPipelineBuilder {
-    size: ZeroShotModernBertSize,
+pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel> {
+    options: M::Options,
 }
 
-impl ZeroShotClassificationPipelineBuilder {
-    pub fn new(size: ZeroShotModernBertSize) -> Self {
-        Self { size }
+impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
+    pub fn new(options: M::Options) -> Self {
+        Self { options }
     }
 
-    pub fn build(self) -> anyhow::Result<ZeroShotClassificationPipeline> {
-        let key = format!("{:?}", self.size);
-        let model = global_cache().get_or_create(&key, || ZeroShotModernBertModel::new(self.size))?;
-        let tokenizer = model.get_tokenizer(self.size)?;
+    pub fn build(self) -> anyhow::Result<ZeroShotClassificationPipeline<M>>
+    where
+        M: Clone + Send + Sync + 'static,
+    {
+        let key = format!("{:?}", self.options);
+        let model = global_cache().get_or_create(&key, || M::new(self.options.clone()))?;
+        let tokenizer = M::get_tokenizer(self.options)?;
         Ok(ZeroShotClassificationPipeline { model, tokenizer })
+    }
+}
+
+impl ZeroShotClassificationPipelineBuilder<crate::models::modernbert::ZeroShotModernBertModel> {
+    pub fn modernbert(size: crate::models::modernbert::ZeroShotModernBertSize) -> Self {
+        Self::new(size)
     }
 }
