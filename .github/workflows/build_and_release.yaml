@@ -6,9 +6,25 @@ on:
       - main
 
 jobs:
+  test: 
+    name: Run Tests 
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Run Tests
+        run: cargo test --release
+
   build:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - name: Checkout code
         uses: actions/checkout@v3

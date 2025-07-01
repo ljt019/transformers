@@ -5,7 +5,7 @@
 #![allow(unused_mut)]
 
 mod loaders;
-pub mod models;
+mod models;
 pub mod pipelines;
 
 pub(crate) const DEFAULT_TEMPERATURE: f64 = 0.7;
@@ -120,16 +120,4 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
             .find(|message| message.role() == "system")
             .map(|msg| msg.content())
     }
-}
-
-/// Prelude module for convenient imports.
-///
-/// This module re-exports the most commonly used types and traits from the transformers crate.
-/// Import this module to get access to `Message` and `MessageVecExt` together:
-///
-/// ```rust
-/// use transformers::prelude::*;
-/// ```
-pub mod prelude {
-    pub use crate::{Message, MessageVecExt};
 }

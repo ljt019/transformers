@@ -1,0 +1,27 @@
+name: Test
+
+on:
+  pull_request_target:
+    types:
+      - opened
+    branches:
+      - dev
+
+
+jobs:
+  test: 
+    name: Run Tests 
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with: 
+            ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Run Tests
+        run: cargo test --release

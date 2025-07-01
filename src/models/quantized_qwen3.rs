@@ -6,14 +6,6 @@
 //! - Multi-context support for concurrent conversations
 //! - GPU acceleration via Candle framework
 //!
-//! # Quick Start
-//! ```rust
-//! use std::fs::File;
-//! let mut file = File::open("model.gguf")?;
-//! let model = Qwen3Model::from_gguf(&mut file, &Device::Cpu)?;
-//! let mut ctx = model.new_context();
-//! let output = ctx.generate(&input_tokens)?;
-//! ```
 
 use crate::models::RmsNorm;
 use candle_core::quantized::{gguf_file, QMatMul};
@@ -552,7 +544,7 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
-use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
@@ -569,10 +561,8 @@ impl Qwen3Model {
     /// Load and prepare the chat template environment
     fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "Qwen/Qwen3-0.6B",
-            "tokenizer_config.json",
-        );
+        let tokenizer_config_loader =
+            crate::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load()?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
@@ -930,6 +920,20 @@ impl TextGenerationModel for Qwen3Model {
     fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
         context.reset();
         Ok(())
+    }
+
+    fn default_generation_params(&self) -> crate::models::generation::GenerationParams {
+        // Recommended Qwen3 inference settings (per official guidance)
+        crate::models::generation::GenerationParams {
+            temperature: self.generation_config.temperature.unwrap_or(0.6),
+            repeat_penalty: self.generation_config.repeat_penalty.unwrap_or(1.1), // presence_penalty analogue
+            repeat_last_n: self.generation_config.repeat_last_n.unwrap_or(64),
+            seed: 42,
+            max_len: 2048, // Qwen3 context length
+            top_p: self.generation_config.top_p.unwrap_or(0.95),
+            top_k: self.generation_config.top_k.unwrap_or(20) as usize,
+            min_p: self.generation_config.min_p.unwrap_or(0.0),
+        }
     }
 }
 

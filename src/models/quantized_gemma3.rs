@@ -7,14 +7,6 @@
 //! - GPU acceleration via Candle framework
 //! - Sliding window attention patterns
 //!
-//! # Quick Start
-//! ```rust
-//! use std::fs::File;
-//! let mut file = File::open("model.gguf")?;
-//! let model = Gemma3Model::from_gguf(&mut file, &Device::Cpu)?;
-//! let mut ctx = model.new_context();
-//! let output = ctx.generate(&input_tokens)?;
-//! ```
 
 use candle_core::quantized::{gguf_file, QMatMul};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -615,7 +607,7 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
-use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
 /// High-level Gemma3 model interface for text generation.
@@ -631,10 +623,8 @@ impl Gemma3Model {
     /// Load and prepare the chat template environment
     fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "google/gemma-3-1b-it",
-            "tokenizer_config.json",
-        );
+        let tokenizer_config_loader =
+            crate::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load()?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
@@ -991,5 +981,20 @@ impl TextGenerationModel for Gemma3Model {
     fn clear_context(&self, context: &mut Context) -> anyhow::Result<()> {
         context.reset();
         Ok(())
+    }
+
+    fn default_generation_params(&self) -> crate::models::generation::GenerationParams {
+        // Recommended Gemma3 inference settings (confirmed with HF team)
+        crate::models::generation::GenerationParams {
+            temperature: self.generation_config.temperature.unwrap_or(1.0),
+            repeat_penalty: self.generation_config.repeat_penalty.unwrap_or(1.15),
+            repeat_last_n: self.generation_config.repeat_last_n.unwrap_or(64),
+            seed: 42,
+            // Gemma3 supports very long context, but keep a sane default
+            max_len: 8192,
+            top_p: self.generation_config.top_p.unwrap_or(0.95),
+            top_k: self.generation_config.top_k.unwrap_or(64) as usize,
+            min_p: self.generation_config.min_p.unwrap_or(0.0),
+        }
     }
 }

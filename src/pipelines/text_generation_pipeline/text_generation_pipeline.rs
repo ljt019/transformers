@@ -8,15 +8,16 @@ use crate::pipelines::utils::load_device;
 use candle_core::Tensor;
 use regex::Regex;
 use serde::Deserialize;
+use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
 pub struct TextGenerationPipeline<M: TextGenerationModel> {
-    model: M,
+    model: Arc<Mutex<M>>,
     model_tokenizer: Tokenizer,
-    context: M::Context,
+    context: Arc<Mutex<M::Context>>,
     gen_params: GenerationParams,
     device: candle_core::Device,
-    last_processed_tokens: Vec<u32>,
+    last_processed_tokens: Arc<Mutex<Vec<u32>>>,
     special_strings: std::collections::HashSet<String>,
 }
 
@@ -47,28 +48,35 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .map(|tok| tok.content.clone())
             .collect();
 
+        // Add standard special tokens that might not be in the decoder
+        special_strings.insert("<|im_start|>".to_string());
+        special_strings.insert("<|im_end|>".to_string());
+        special_strings.insert("<|im_sep|>".to_string());
+
         Ok(Self {
-            model,
+            model: Arc::new(Mutex::new(model)),
             model_tokenizer,
-            context,
+            context: Arc::new(Mutex::new(context)),
             gen_params,
             device,
-            last_processed_tokens: Vec::new(),
+            last_processed_tokens: Arc::new(Mutex::new(Vec::new())),
             special_strings,
         })
     }
 
     /// Get the current position in the context (number of cached tokens)
     pub fn context_position(&self) -> usize {
-        self.context.position()
+        self.context.lock().unwrap().position()
     }
 
-    pub fn prompt_completion(&mut self, prompt: &str) -> anyhow::Result<String> {
+    pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset context for fresh generation
-        self.context.reset();
+        self.context.lock().unwrap().reset();
 
         let templated_prompt = self
             .model
+            .lock()
+            .unwrap()
             .apply_chat_template(&[crate::Message::user(prompt)])?;
 
         let prompt_tokens = self
@@ -81,8 +89,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.completion(&prompt_tokens)
     }
 
-    pub fn message_completion(&mut self, messages: &[crate::Message]) -> anyhow::Result<String> {
-        let templated_prompt = self.model.apply_chat_template(messages)?;
+    pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+        let templated_prompt = self.model.lock().unwrap().apply_chat_template(messages)?;
 
         let new_tokens = self
             .model_tokenizer
@@ -95,36 +103,39 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         eprintln!("Debug: new_tokens.len() = {}", new_tokens.len());
         eprintln!(
             "Debug: last_processed_tokens.len() = {}",
-            self.last_processed_tokens.len()
+            self.last_processed_tokens.lock().unwrap().len()
         );
-        eprintln!("Debug: context.position() = {}", self.context.position());
+        eprintln!(
+            "Debug: context.position() = {}",
+            self.context.lock().unwrap().position()
+        );
 
         // Check if we need to reset due to context overflow
-        let max_seq_len = self.model.get_max_seq_len();
+        let max_seq_len = self.model.lock().unwrap().get_max_seq_len();
         let pending_tokens = new_tokens.len();
 
-        if self.context.position() + pending_tokens > max_seq_len {
+        if self.context.lock().unwrap().position() + pending_tokens > max_seq_len {
             // Context would overflow, reset and start fresh
             eprintln!("Debug: Resetting due to context overflow");
-            self.context.reset();
-            self.last_processed_tokens.clear();
+            self.context.lock().unwrap().reset();
+            self.last_processed_tokens.lock().unwrap().clear();
         } else if self.can_reuse_cache(&new_tokens) {
             // Cache prefix matches, only feed the suffix
-            let prefix_len = self.last_processed_tokens.len();
+            let prefix_len = self.last_processed_tokens.lock().unwrap().len();
             let new_portion = &new_tokens[prefix_len..];
             let response = self.completion(new_portion)?;
 
             // Track only prompt tokens for next turn
-            self.last_processed_tokens = new_tokens;
+            *self.last_processed_tokens.lock().unwrap() = new_tokens;
             return Ok(response);
         } else {
             // Cache is invalid (conversation changed), reset
             eprintln!("Debug: Cache invalid, resetting");
             eprintln!(
                 "Debug: starts_with = {}",
-                new_tokens.starts_with(&self.last_processed_tokens)
+                new_tokens.starts_with(&self.last_processed_tokens.lock().unwrap())
             );
-            self.context.reset();
+            self.context.lock().unwrap().reset();
         }
 
         // Process all tokens from scratch
@@ -135,20 +146,22 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let response = self.completion(&new_tokens)?;
 
         // Update tracking (prompt tokens only)
-        self.last_processed_tokens = new_tokens;
+        *self.last_processed_tokens.lock().unwrap() = new_tokens;
 
         Ok(response)
     }
 
     pub fn prompt_completion_stream(
-        &mut self,
+        &self,
         prompt: &str,
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
         // Fresh turn → reset context
-        self.context.reset();
+        self.context.lock().unwrap().reset();
 
         let templated = self
             .model
+            .lock()
+            .unwrap()
             .apply_chat_template(&[crate::Message::user(prompt)])?;
         let tokens = self
             .model_tokenizer
@@ -164,10 +177,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     }
 
     pub fn message_completion_stream(
-        &mut self,
+        &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
-        let templated = self.model.apply_chat_template(messages)?;
+        let templated = self.model.lock().unwrap().apply_chat_template(messages)?;
         let new_tokens = self
             .model_tokenizer
             .encode(templated, true)
@@ -176,21 +189,21 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .to_vec();
 
         // Same cache logic you already have -------------------------------
-        let max_seq = self.model.get_max_seq_len();
-        if self.context.position() + new_tokens.len() > max_seq {
-            self.context.reset();
-            self.last_processed_tokens.clear();
+        let max_seq = self.model.lock().unwrap().get_max_seq_len();
+        if self.context.lock().unwrap().position() + new_tokens.len() > max_seq {
+            self.context.lock().unwrap().reset();
+            self.last_processed_tokens.lock().unwrap().clear();
         } else if self.can_reuse_cache(&new_tokens) {
-            let suffix = new_tokens[self.last_processed_tokens.len()..].to_vec();
-            self.last_processed_tokens = new_tokens;
+            let suffix = new_tokens[self.last_processed_tokens.lock().unwrap().len()..].to_vec();
+            *self.last_processed_tokens.lock().unwrap() = new_tokens;
             let inner = self.raw_completion_stream(suffix);
             use futures::StreamExt;
             return Ok(inner.map(unwrap_res));
         } else {
-            self.context.reset();
+            self.context.lock().unwrap().reset();
         }
 
-        self.last_processed_tokens = new_tokens.clone();
+        *self.last_processed_tokens.lock().unwrap() = new_tokens.clone();
         use futures::StreamExt;
         let inner = self.raw_completion_stream(new_tokens);
         Ok(inner.map(unwrap_res))
@@ -199,10 +212,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
         // Cache can be reused if the new prompt begins with the exact token
         // sequence that is already cached.
-        new_tokens.starts_with(&self.last_processed_tokens)
+        new_tokens.starts_with(&self.last_processed_tokens.lock().unwrap())
     }
 
-    fn completion(&mut self, input_tokens: &[u32]) -> anyhow::Result<String> {
+    fn completion(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
         const CHUNK_SIZE: usize = 64; // Must be <= initial kv cache size
 
         let mut logits_processor =
@@ -218,7 +231,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             let chunk = &input_tokens[idx..end];
 
             let input = Tensor::new(chunk, &self.device)?.unsqueeze(0)?;
-            let logits = self.context.generate(&input)?;
+            let logits = {
+                let mut ctx = self.context.lock().unwrap();
+                ctx.generate(&input)
+            }?;
             last_logits = Some(logits.squeeze(0)?);
             idx = end;
         }
@@ -228,14 +244,17 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         generated_tokens.push(next_token);
 
         // Generate autoregressively
-        let eos_tokens = self.model.get_eos_tokens();
+        let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
         for _ in 0..self.gen_params.max_len {
             if eos_tokens.contains(&next_token) {
                 break;
             }
 
             let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
-            let logits = self.context.generate(&input)?;
+            let logits = {
+                let mut ctx = self.context.lock().unwrap();
+                ctx.generate(&input)
+            }?;
             let logits = logits.squeeze(0)?;
 
             let start_at = generated_tokens
@@ -254,7 +273,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         }
 
         // Filter out EOS tokens before decoding
-        let eos_tokens = self.model.get_eos_tokens();
+        let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
         let filtered_tokens: Vec<u32> = generated_tokens
             .into_iter()
             .filter(|&token| !eos_tokens.contains(&token))
@@ -269,16 +288,16 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         Ok(generated_tokens_str)
     }
 
-    fn raw_completion_stream<'a>(&'a mut self, input_tokens: Vec<u32>) -> RawTokenStream<'a>
+    fn raw_completion_stream<'a>(&'a self, input_tokens: Vec<u32>) -> RawTokenStream<'a>
     where
         M: 'a,
     {
         // Capture everything the async generator needs **by value** so
         // nothing is moved out of &mut self after we return.
         let device = self.device.clone();
-        let eos_tokens = self.model.get_eos_tokens();
+        let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
         let tokenizer = self.model_tokenizer.clone();
-        let context = &mut self.context; // still lives inside self
+        let context = Arc::clone(&self.context); // Clone the Arc, not the guard
         let params = self.gen_params.clone();
 
         Box::pin(try_stream! {
@@ -295,7 +314,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 let chunk = &input_tokens[idx..end];
 
                 let input  = Tensor::new(chunk, &device)?.unsqueeze(0)?;
-                let logits = context.generate(&input)?;
+                let logits = {
+                    let mut ctx = context.lock().unwrap();
+                    ctx.generate(&input)
+                }?;
                 last_logits = Some(logits.squeeze(0)?);
                 idx = end;
             }
@@ -329,7 +351,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 }
 
                 let input  = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-                let logits = context.generate(&input)?;
+                let logits = {
+                    let mut ctx = context.lock().unwrap();
+                    ctx.generate(&input)
+                }?;
                 let logits = logits.squeeze(0)?;
 
                 // Repeat-penalty handling
@@ -363,34 +388,37 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 }
 
 impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
-    pub fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()> {
-        self.model.set_reasoning(enable)
+    pub fn set_reasoning(&self, enable: bool) -> anyhow::Result<()> {
+        self.model.lock().unwrap().set_reasoning(enable)
     }
 }
 
 impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
-    pub fn register_tool<T: IntoTool>(&mut self, tool: T) -> anyhow::Result<()> {
-        self.model.register_tool(tool.into_tool())
+    pub fn register_tool<T: IntoTool>(&self, tool: T) -> anyhow::Result<()> {
+        self.model.lock().unwrap().register_tool(tool.into_tool())
     }
 
     /// Register multiple tools at once.
-    pub fn register_tools(&mut self, tools: Vec<Tool>) -> anyhow::Result<()> {
+    pub fn register_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
         for tool in tools {
-            self.model.register_tool(tool)?;
+            self.model.lock().unwrap().register_tool(tool)?;
         }
         Ok(())
     }
 
     pub fn registered_tools(&self) -> Vec<Tool> {
-        self.model.registered_tools()
+        self.model.lock().unwrap().registered_tools()
     }
 
     /// Same as [`prompt_completion`], but automatically handles tool calls emitted by the
     /// model. The function will repeatedly generate until the final assistant response no
     /// longer contains a `<tool_call>` block, at which point that response is returned.
-    pub fn prompt_completion_with_tools(&mut self, prompt: &str) -> anyhow::Result<String> {
+    pub fn prompt_completion_with_tools(&self, prompt: &str) -> anyhow::Result<String> {
         // Accumulated chat history
         let mut messages = vec![crate::Message::user(prompt)];
+
+        // Accumulated output to return (includes tool responses like streaming version)
+        let mut complete_output = String::new();
 
         // Safety limit to avoid infinite loops in case of model issues
         const MAX_TOOL_ITERATIONS: usize = 8;
@@ -407,10 +435,32 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
 
-            // If no tool calls, return the assistant response as final answer
+            // If no tool calls, append this final response and return complete output
             if tool_calls.is_empty() {
-                return Ok(assistant_response.trim().to_string());
+                // Filter out special tokens from the final response like streaming version does
+                let filtered_response: String = assistant_response
+                    .chars()
+                    .collect::<String>()
+                    .split_whitespace()
+                    .filter(|token| !self.special_strings.contains(*token))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                complete_output.push_str(&filtered_response.trim());
+                return Ok(complete_output);
             }
+
+            // Add the assistant response with tool calls to our output
+            // Filter out special tokens like the streaming version does
+            let filtered_assistant_response: String = assistant_response
+                .chars()
+                .collect::<String>()
+                .split_whitespace()
+                .filter(|token| !self.special_strings.contains(*token))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            complete_output.push_str(&filtered_assistant_response);
 
             // Record the assistant message that issued the tool call
             eprintln!(
@@ -420,27 +470,47 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             messages.push(crate::Message::assistant(&assistant_response));
 
             // Execute each tool call and append the tool response messages
-            for tc in tool_calls {
+            let mut is_first_tool = true;
+            let total_tools = tool_calls.len();
+            for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                 // Find the tool to get its error strategy and retry settings
-                let tool = self
-                    .model
-                    .registered_tools()
-                    .into_iter()
-                    .find(|t| t.name() == tc.name)
-                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
+                let tool = {
+                    let mdl = self.model.lock().unwrap();
+                    mdl.registered_tools()
+                }
+                .into_iter()
+                .find(|t| t.name() == tc.name)
+                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
                 let mut last_error = None;
                 let mut success = false;
 
                 // Retry loop
                 for attempt in 0..=tool.max_retries() {
-                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                    match {
+                        let mut mdl = self.model.lock().unwrap();
+                        mdl.call_tool(tc.name.clone(), tc.arguments.clone())
+                    } {
                         Ok(result) => {
+                            // Add tool response to output (matching streaming format)
+                            let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
+                            let trailing_newlines = if tool_index == total_tools - 1 {
+                                "\n\n"
+                            } else {
+                                "\n"
+                            };
+                            let tool_response = format!(
+                                "{}<tool_response name=\"{}\">\n{}\n</tool_response>{}",
+                                leading_newlines, tc.name, result, trailing_newlines
+                            );
+                            complete_output.push_str(&tool_response);
+
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
                                 content: result,
                             });
                             success = true;
+                            is_first_tool = false;
                             break;
                         }
                         Err(e) => {
@@ -497,11 +567,14 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     /// model. The function will repeatedly generate until the final assistant response no
     /// longer contains a `<tool_call>` block, at which point that response is returned.
     pub fn message_completion_with_tools(
-        &mut self,
+        &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<String> {
         // Accumulated chat history
         let mut messages = messages.to_vec();
+
+        // Accumulated output to return (includes tool responses like streaming version)
+        let mut complete_output = String::new();
 
         // Safety limit to avoid infinite loops in case of model issues
         const MAX_TOOL_ITERATIONS: usize = 8;
@@ -513,10 +586,32 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
 
-            // If no tool calls, return the assistant response as final answer
+            // If no tool calls, append this final response and return complete output
             if tool_calls.is_empty() {
-                return Ok(assistant_response.trim().to_string());
+                // Filter out special tokens from the final response like streaming version does
+                let filtered_response: String = assistant_response
+                    .chars()
+                    .collect::<String>()
+                    .split_whitespace()
+                    .filter(|token| !self.special_strings.contains(*token))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                complete_output.push_str(&filtered_response.trim());
+                return Ok(complete_output);
             }
+
+            // Add the assistant response with tool calls to our output
+            // Filter out special tokens like the streaming version does
+            let filtered_assistant_response: String = assistant_response
+                .chars()
+                .collect::<String>()
+                .split_whitespace()
+                .filter(|token| !self.special_strings.contains(*token))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            complete_output.push_str(&filtered_assistant_response);
 
             // Record the assistant message that issued the tool call
             eprintln!(
@@ -526,27 +621,47 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             messages.push(crate::Message::assistant(&assistant_response));
 
             // Execute each tool call and append the tool response messages
-            for tc in tool_calls {
+            let mut is_first_tool = true;
+            let total_tools = tool_calls.len();
+            for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                 // Find the tool to get its error strategy and retry settings
-                let tool = self
-                    .model
-                    .registered_tools()
-                    .into_iter()
-                    .find(|t| t.name() == tc.name)
-                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
+                let tool = {
+                    let mdl = self.model.lock().unwrap();
+                    mdl.registered_tools()
+                }
+                .into_iter()
+                .find(|t| t.name() == tc.name)
+                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
                 let mut last_error = None;
                 let mut success = false;
 
                 // Retry loop
                 for attempt in 0..=tool.max_retries() {
-                    match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                    match {
+                        let mut mdl = self.model.lock().unwrap();
+                        mdl.call_tool(tc.name.clone(), tc.arguments.clone())
+                    } {
                         Ok(result) => {
+                            // Add tool response to output (matching streaming format)
+                            let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
+                            let trailing_newlines = if tool_index == total_tools - 1 {
+                                "\n\n"
+                            } else {
+                                "\n"
+                            };
+                            let tool_response = format!(
+                                "{}<tool_response name=\"{}\">\n{}\n</tool_response>{}",
+                                leading_newlines, tc.name, result, trailing_newlines
+                            );
+                            complete_output.push_str(&tool_response);
+
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
                                 content: result,
                             });
                             success = true;
+                            is_first_tool = false;
                             break;
                         }
                         Err(e) => {
@@ -603,7 +718,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     /// This method streams everything: the assistant's thinking, tool call blocks, tool responses,
     /// and the final response in one seamless stream.
     pub fn prompt_completion_stream_with_tools(
-        &mut self,
+        &self,
         prompt: &str,
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
         let messages = vec![crate::Message::user(prompt)];
@@ -614,7 +729,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     /// This method streams everything: the assistant's thinking, tool call blocks, tool responses,
     /// and the final response in one seamless stream.
     pub fn message_completion_stream_with_tools(
-        &mut self,
+        &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
         use async_stream::stream;
@@ -678,8 +793,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 let total_tools = tool_calls.len();
                 for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                     // Find the tool to get its error strategy and retry settings
-                    let tool = match self.model.registered_tools()
-                        .into_iter()
+                    let tool_list = {
+                        let mdl = self.model.lock().unwrap();
+                        mdl.registered_tools()
+                    };
+                    let tool = match tool_list.into_iter()
                         .find(|t| t.name() == tc.name) {
                         Some(tool) => tool,
                         None => {
@@ -694,7 +812,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                     // Retry loop
                     for attempt in 0..=tool.max_retries() {
-                        match self.model.call_tool(tc.name.clone(), tc.arguments.clone()) {
+                        match {
+                            let mut mdl = self.model.lock().unwrap();
+                            mdl.call_tool(tc.name.clone(), tc.arguments.clone())
+                        } {
                             Ok(result) => {
                                 // Use double newlines for first tool, single for subsequent ones
                                 let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
