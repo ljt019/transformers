@@ -7,13 +7,38 @@ fn main() -> Result<()> {
     let pipeline =
         ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
-    println!("Pipeline built successfully.");
+    println!("Pipeline built successfully.\n");
 
     let text = "I love my new car";
     let candidate_labels = vec!["coding", "reading", "writing", "speaking", "cars"];
 
-    let result = pipeline.predict_multi_label(text, &candidate_labels)?;
-    println!("Result: {:?}", result);
+    // Single-label classification: probabilities sum to 1 (mutually exclusive)
+    println!("=== Single-label Classification (predict) ===");
+    println!("Use this when you want to classify text into one of several mutually exclusive categories.");
+    println!("Probabilities will sum to 1.0, representing confidence that the text belongs to each category.\n");
+
+    let single_label_result = pipeline.predict(text, &candidate_labels)?;
+    println!("Text: \"{}\"", text);
+    println!("Single-label results:");
+    for (label, score) in &single_label_result {
+        println!("  - {}: {:.4}", label, score);
+    }
+
+    // Verify probabilities sum to 1
+    let sum: f32 = single_label_result.iter().map(|(_, score)| score).sum();
+    println!("  Total probability: {:.4}\n", sum);
+
+    // Multi-label classification: raw entailment probabilities (independent labels)
+    println!("=== Multi-label Classification (predict_multi_label) ===");
+    println!("Use this when labels can be independent and multiple labels could apply.");
+    println!("Returns raw entailment probabilities for each label independently.\n");
+
+    let multi_label_result = pipeline.predict_multi_label(text, &candidate_labels)?;
+    println!("Text: \"{}\"", text);
+    println!("Multi-label results:");
+    for (label, score) in &multi_label_result {
+        println!("  - {}: {:.4}", label, score);
+    }
 
     Ok(())
 }

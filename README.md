@@ -225,6 +225,12 @@ fn main() -> Result<()> {
 
 ### Zero-Shot Classification (ModernBERT NLI Finetune)
 
+Zero-shot classification offers two methods for different use cases:
+
+#### Single-Label Classification (`predict`)
+
+Use when you want to classify text into one of several **mutually exclusive** categories. Probabilities sum to 1.0.
+
 ```rust
 use transformers::pipelines::zero_shot_classification_pipeline::{
     ZeroShotClassificationPipelineBuilder, ModernBertSize,
@@ -235,15 +241,16 @@ fn main() -> Result<()> {
     // 1. Build the pipeline
     let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
-    // 2. Classify text using candidate labels
-    let candidate_labels = ["economics", "sports", "technology"];
-    let results = pipeline.predict("The Federal Reserve raised interest rates.", &candidate_labels)?;
+    // 2. Single-label classification
+    let text = "The Federal Reserve raised interest rates.";
+    let candidate_labels = ["economics", "politics", "technology", "sports"];
+    let results = pipeline.predict(text, &candidate_labels)?;
 
     println!("Text: {}", text);
     for (label, score) in results {
         println!("- {}: {:.4}", label, score);
     }
-    // Example output:
+    // Example output (probabilities sum to 1.0):
     // - economics: 0.8721
     // - politics: 0.1134
     // - technology: 0.0098
@@ -253,11 +260,43 @@ fn main() -> Result<()> {
 }
 ```
 
+#### Multi-Label Classification (`predict_multi_label`)
+
+Use when labels can be **independent** and multiple labels could apply to the same text. Returns raw entailment probabilities.
+
+```rust
+use transformers::pipelines::zero_shot_classification_pipeline::{
+    ZeroShotClassificationPipelineBuilder, ModernBertSize,
+};
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    // 1. Build the pipeline
+    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
+
+    // 2. Multi-label classification
+    let text = "I love reading books about machine learning and artificial intelligence.";
+    let candidate_labels = ["technology", "education", "reading", "science"];
+    let results = pipeline.predict_multi_label(text, &candidate_labels)?;
+
+    println!("Text: {}", text);
+    for (label, score) in results {
+        println!("- {}: {:.4}", label, score);
+    }
+    // Example output (independent probabilities):
+    // - technology: 0.9234
+    // - education: 0.8456
+    // - reading: 0.9567
+    // - science: 0.7821
+    
+    Ok(())
+}
+```
+
 ## Future Plans
 
 - Add more model families and sizes
 - Support additional pipelines (summarization, classification)
-- Improve performance and error handling
 - CUDA support for faster inference
 - Direct model interface (beyond pipelines)
 
