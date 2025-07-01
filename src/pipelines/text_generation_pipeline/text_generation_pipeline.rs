@@ -417,6 +417,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         // Accumulated chat history
         let mut messages = vec![crate::Message::user(prompt)];
 
+        // Accumulated output to return (includes tool responses like streaming version)
+        let mut complete_output = String::new();
+
         // Safety limit to avoid infinite loops in case of model issues
         const MAX_TOOL_ITERATIONS: usize = 8;
 
@@ -432,10 +435,32 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
 
-            // If no tool calls, return the assistant response as final answer
+            // If no tool calls, append this final response and return complete output
             if tool_calls.is_empty() {
-                return Ok(assistant_response.trim().to_string());
+                // Filter out special tokens from the final response like streaming version does
+                let filtered_response: String = assistant_response
+                    .chars()
+                    .collect::<String>()
+                    .split_whitespace()
+                    .filter(|token| !self.special_strings.contains(*token))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                complete_output.push_str(&filtered_response.trim());
+                return Ok(complete_output);
             }
+
+            // Add the assistant response with tool calls to our output
+            // Filter out special tokens like the streaming version does
+            let filtered_assistant_response: String = assistant_response
+                .chars()
+                .collect::<String>()
+                .split_whitespace()
+                .filter(|token| !self.special_strings.contains(*token))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            complete_output.push_str(&filtered_assistant_response);
 
             // Record the assistant message that issued the tool call
             eprintln!(
@@ -445,7 +470,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             messages.push(crate::Message::assistant(&assistant_response));
 
             // Execute each tool call and append the tool response messages
-            for tc in tool_calls {
+            let mut is_first_tool = true;
+            let total_tools = tool_calls.len();
+            for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                 // Find the tool to get its error strategy and retry settings
                 let tool = {
                     let mdl = self.model.lock().unwrap();
@@ -465,11 +492,25 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                         mdl.call_tool(tc.name.clone(), tc.arguments.clone())
                     } {
                         Ok(result) => {
+                            // Add tool response to output (matching streaming format)
+                            let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
+                            let trailing_newlines = if tool_index == total_tools - 1 {
+                                "\n\n"
+                            } else {
+                                "\n"
+                            };
+                            let tool_response = format!(
+                                "{}<tool_response name=\"{}\">\n{}\n</tool_response>{}",
+                                leading_newlines, tc.name, result, trailing_newlines
+                            );
+                            complete_output.push_str(&tool_response);
+
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
                                 content: result,
                             });
                             success = true;
+                            is_first_tool = false;
                             break;
                         }
                         Err(e) => {
@@ -532,6 +573,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         // Accumulated chat history
         let mut messages = messages.to_vec();
 
+        // Accumulated output to return (includes tool responses like streaming version)
+        let mut complete_output = String::new();
+
         // Safety limit to avoid infinite loops in case of model issues
         const MAX_TOOL_ITERATIONS: usize = 8;
 
@@ -542,10 +586,32 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
 
-            // If no tool calls, return the assistant response as final answer
+            // If no tool calls, append this final response and return complete output
             if tool_calls.is_empty() {
-                return Ok(assistant_response.trim().to_string());
+                // Filter out special tokens from the final response like streaming version does
+                let filtered_response: String = assistant_response
+                    .chars()
+                    .collect::<String>()
+                    .split_whitespace()
+                    .filter(|token| !self.special_strings.contains(*token))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                complete_output.push_str(&filtered_response.trim());
+                return Ok(complete_output);
             }
+
+            // Add the assistant response with tool calls to our output
+            // Filter out special tokens like the streaming version does
+            let filtered_assistant_response: String = assistant_response
+                .chars()
+                .collect::<String>()
+                .split_whitespace()
+                .filter(|token| !self.special_strings.contains(*token))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            complete_output.push_str(&filtered_assistant_response);
 
             // Record the assistant message that issued the tool call
             eprintln!(
@@ -555,7 +621,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             messages.push(crate::Message::assistant(&assistant_response));
 
             // Execute each tool call and append the tool response messages
-            for tc in tool_calls {
+            let mut is_first_tool = true;
+            let total_tools = tool_calls.len();
+            for (tool_index, tc) in tool_calls.into_iter().enumerate() {
                 // Find the tool to get its error strategy and retry settings
                 let tool = {
                     let mdl = self.model.lock().unwrap();
@@ -575,11 +643,25 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                         mdl.call_tool(tc.name.clone(), tc.arguments.clone())
                     } {
                         Ok(result) => {
+                            // Add tool response to output (matching streaming format)
+                            let leading_newlines = if is_first_tool { "\n\n" } else { "\n" };
+                            let trailing_newlines = if tool_index == total_tools - 1 {
+                                "\n\n"
+                            } else {
+                                "\n"
+                            };
+                            let tool_response = format!(
+                                "{}<tool_response name=\"{}\">\n{}\n</tool_response>{}",
+                                leading_newlines, tc.name, result, trailing_newlines
+                            );
+                            complete_output.push_str(&tool_response);
+
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
                                 content: result,
                             });
                             success = true;
+                            is_first_tool = false;
                             break;
                         }
                         Err(e) => {

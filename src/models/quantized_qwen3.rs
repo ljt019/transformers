@@ -544,7 +544,7 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
-use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
@@ -561,10 +561,8 @@ impl Qwen3Model {
     /// Load and prepare the chat template environment
     fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "Qwen/Qwen3-0.6B",
-            "tokenizer_config.json",
-        );
+        let tokenizer_config_loader =
+            crate::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load()?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;

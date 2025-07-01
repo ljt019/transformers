@@ -1,8 +1,8 @@
-use transformers::pipelines::text_generation_pipeline::*;
-use transformers::pipelines::fill_mask_pipeline::*;
-use transformers::pipelines::zero_shot_classification_pipeline::*;
-use transformers::pipelines::sentiment_analysis_pipeline::*;
 use transformers::models::quantized_qwen3::Qwen3Size;
+use transformers::pipelines::fill_mask_pipeline::*;
+use transformers::pipelines::sentiment_analysis_pipeline::*;
+use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::zero_shot_classification_pipeline::*;
 
 #[test]
 fn basic_text_generation() -> anyhow::Result<()> {
@@ -17,19 +17,22 @@ fn basic_text_generation() -> anyhow::Result<()> {
 }
 
 #[tool]
-fn say_hello(name: String) -> Result<String, ToolError> {
-    Ok(format!("Hello {name}!"))
+fn get_weather(city: String) -> Result<String, ToolError> {
+    Ok(format!("The weather in {city} is sunny."))
 }
 
 #[test]
 fn basic_tool_use() -> anyhow::Result<()> {
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .seed(42)
-        .max_len(8)
+        .max_len(150)
         .build()?;
-    pipeline.register_tools(tools![say_hello])?;
-    let out = pipeline.prompt_completion_with_tools("Call say_hello with Alice")?;
-    assert!(out.contains("Alice"));
+    pipeline.register_tools(tools![get_weather])?;
+    let out = pipeline.prompt_completion_with_tools("What's the weather like in Paris today?")?;
+    println!("{}", out);
+    assert!(out.contains(
+        "<tool_response name=\"get_weather\">\nThe weather in Paris is sunny.\n</tool_response>"
+    ));
     Ok(())
 }
 
@@ -51,8 +54,7 @@ async fn basic_streaming() -> anyhow::Result<()> {
 
 #[test]
 fn basic_fill_mask() -> anyhow::Result<()> {
-    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base)
-        .build()?;
+    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
     let res = pipeline.fill_mask("The capital of France is [MASK].")?;
     assert!(res.contains("Paris") || !res.trim().is_empty());
     Ok(())
@@ -60,8 +62,8 @@ fn basic_fill_mask() -> anyhow::Result<()> {
 
 #[test]
 fn basic_zero_shot_classification() -> anyhow::Result<()> {
-    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ZeroShotModernBertSize::Base)
-        .build()?;
+    let pipeline =
+        ZeroShotClassificationPipelineBuilder::modernbert(ZeroShotModernBertSize::Base).build()?;
     let labels = ["politics", "sports"];
     let res = pipeline.predict("The election results were surprising", &labels)?;
     assert_eq!(res.len(), 2);
@@ -70,8 +72,8 @@ fn basic_zero_shot_classification() -> anyhow::Result<()> {
 
 #[test]
 fn basic_sentiment() -> anyhow::Result<()> {
-    let pipeline = SentimentAnalysisPipelineBuilder::modernbert(SentimentModernBertSize::Base)
-        .build()?;
+    let pipeline =
+        SentimentAnalysisPipelineBuilder::modernbert(SentimentModernBertSize::Base).build()?;
     let res = pipeline.predict("I love Rust!")?;
     assert!(!res.trim().is_empty());
     Ok(())
