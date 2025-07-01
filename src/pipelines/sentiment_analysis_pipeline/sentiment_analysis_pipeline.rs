@@ -10,8 +10,4 @@ impl SentimentAnalysisPipeline {
     pub fn predict(&self, text: &str) -> anyhow::Result<String> {
         self.model.predict(&self.tokenizer, text)
     }
-
-    pub fn get_tokenizer(&self, size: SentimentModernBertSize) -> anyhow::Result<Tokenizer> {
-        self.model.get_tokenizer(size)
-    }
 }

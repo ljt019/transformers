@@ -13,8 +13,9 @@ impl FillMaskPipelineBuilder {
 
     pub fn build(self) -> anyhow::Result<FillMaskPipeline> {
         let key = format!("{:?}", self.size);
-        let model = global_cache().get_or_create(&key, || FillMaskModernBertModel::new(self.size))?;
-        let tokenizer = model.get_tokenizer(self.size)?;
+        let model =
+            global_cache().get_or_create(&key, || FillMaskModernBertModel::new(self.size))?;
+        let tokenizer = FillMaskModernBertModel::get_tokenizer(self.size)?;
         Ok(FillMaskPipeline { model, tokenizer })
     }
 }
