@@ -34,6 +34,38 @@ fn unwrap_res(r: anyhow::Result<String>) -> String {
     r.expect("stream generation failed")
 }
 
+/// Input for a text-generation request.
+///
+/// This enum allows the caller to pass either a plain prompt string or a slice
+/// of [`crate::Message`] objects representing a chat history.  It is used by
+/// the higher level convenience methods so that the API surface can be reduced
+/// without losing flexibility.
+#[derive(Debug, Clone)]
+pub enum Input<'a> {
+    /// A raw prompt string.
+    Prompt(&'a str),
+    /// A sequence of chat messages.
+    Messages(&'a [crate::Message]),
+}
+
+impl<'a> From<&'a str> for Input<'a> {
+    fn from(s: &'a str) -> Self {
+        Self::Prompt(s)
+    }
+}
+
+impl<'a> From<&'a [crate::Message]> for Input<'a> {
+    fn from(m: &'a [crate::Message]) -> Self {
+        Self::Messages(m)
+    }
+}
+
+impl<'a> From<&'a Vec<crate::Message>> for Input<'a> {
+    fn from(v: &'a Vec<crate::Message>) -> Self {
+        Self::Messages(v.as_slice())
+    }
+}
+
 impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     pub fn new(model: M, gen_params: GenerationParams) -> anyhow::Result<Self> {
         let model_tokenizer = model.get_tokenizer()?;
@@ -69,6 +101,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.context.lock().unwrap().position()
     }
 
+    /// Generate a completion from either a prompt or a chat history.
+    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
+        match input.into() {
+            Input::Prompt(p) => self.prompt_completion(p),
+            Input::Messages(m) => self.message_completion(m),
+        }
+    }
+
     pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset context for fresh generation
         self.context.lock().unwrap().reset();
@@ -86,7 +126,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .get_ids()
             .to_vec();
 
-        self.completion(&prompt_tokens)
+        self.completion_from_tokens(&prompt_tokens)
     }
 
     pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
@@ -123,7 +163,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             // Cache prefix matches, only feed the suffix
             let prefix_len = self.last_processed_tokens.lock().unwrap().len();
             let new_portion = &new_tokens[prefix_len..];
-            let response = self.completion(new_portion)?;
+            let response = self.completion_from_tokens(new_portion)?;
 
             // Track only prompt tokens for next turn
             *self.last_processed_tokens.lock().unwrap() = new_tokens;
@@ -143,7 +183,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             "Debug: Processing all {} tokens from scratch",
             new_tokens.len()
         );
-        let response = self.completion(&new_tokens)?;
+        let response = self.completion_from_tokens(&new_tokens)?;
 
         // Update tracking (prompt tokens only)
         *self.last_processed_tokens.lock().unwrap() = new_tokens;
@@ -175,6 +215,18 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let inner = self.raw_completion_stream(tokens);
         Ok(inner.map(unwrap_res))
     }
+
+    /// Streaming version of [`completion`].
+    pub fn completion_stream<'a>(
+        &'a self,
+        input: impl Into<Input<'a>>,
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+        match input.into() {
+            Input::Prompt(p) => Ok(Box::pin(self.prompt_completion_stream(p)?)),
+            Input::Messages(m) => Ok(Box::pin(self.message_completion_stream(m)?)),
+        }
+    }
+
 
     pub fn message_completion_stream(
         &self,
@@ -215,7 +267,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         new_tokens.starts_with(&self.last_processed_tokens.lock().unwrap())
     }
 
-    fn completion(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
+    fn completion_from_tokens(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
         const CHUNK_SIZE: usize = 64; // Must be <= initial kv cache size
 
         let mut logits_processor =
@@ -408,6 +460,25 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
     pub fn registered_tools(&self) -> Vec<Tool> {
         self.model.lock().unwrap().registered_tools()
+    }
+
+    /// Generate a completion with tool support from either a prompt or chat messages.
+    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
+        match input.into() {
+            Input::Prompt(p) => self.prompt_completion_with_tools(p),
+            Input::Messages(m) => self.message_completion_with_tools(m),
+        }
+    }
+
+    /// Streaming variant of [`completion_with_tools`].
+    pub fn completion_with_tools_stream<'a>(
+        &'a self,
+        input: impl Into<Input<'a>>,
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+        match input.into() {
+            Input::Prompt(p) => Ok(Box::pin(self.prompt_completion_stream_with_tools(p)?)),
+            Input::Messages(m) => Ok(Box::pin(self.message_completion_stream_with_tools(m)?)),
+        }
     }
 
     /// Same as [`prompt_completion`], but automatically handles tool calls emitted by the

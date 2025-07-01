@@ -19,7 +19,7 @@ fn multiple_pipelines_share_weights_and_have_independent_caches() -> anyhow::Res
     assert_eq!(global_cache().len(), 1);
 
     let prompt = "Hello, world!";
-    let _ = pipelines[0].prompt_completion(prompt)?;
+    let _ = pipelines[0].completion(prompt)?;
 
     // The first pipeline should have advanced its context
     assert!(pipelines[0].context_position() > 0);

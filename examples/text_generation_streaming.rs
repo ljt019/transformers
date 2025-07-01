@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
         .max_len(1024)
         .build()?;
 
-    let mut stream = pipeline.prompt_completion_stream(
+    let mut stream = pipeline.completion_stream(
         "Explain the concept of Large Language Models in simple terms.",
     )?;
 
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
         Message::user("What is the capital of France?"),
     ];
 
-    let mut stream_two = pipeline.message_completion_stream(&messages)?;
+    let mut stream_two = pipeline.completion_stream(&messages)?;
 
     println!("\n--- Generated Text 2 ---");
     while let Some(tok) = stream_two.next().await {
