@@ -233,10 +233,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             let input = Tensor::new(chunk, &self.device)?.unsqueeze(0)?;
             let logits = {
                 let mut ctx = self.context.lock().unwrap();
-                let out = ctx.generate(&input)?;
-                drop(ctx);
-                out
-            };
+                ctx.generate(&input)
+            }?;
             last_logits = Some(logits.squeeze(0)?);
             idx = end;
         }
@@ -255,10 +253,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             let logits = {
                 let mut ctx = self.context.lock().unwrap();
-                let out = ctx.generate(&input)?;
-                drop(ctx);
-                out
-            };
+                ctx.generate(&input)
+            }?;
             let logits = logits.squeeze(0)?;
 
             let start_at = generated_tokens
@@ -320,10 +316,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 let input  = Tensor::new(chunk, &device)?.unsqueeze(0)?;
                 let logits = {
                     let mut ctx = context.lock().unwrap();
-                    let out = ctx.generate(&input)?;
-                    drop(ctx);
-                    out
-                };
+                    ctx.generate(&input)
+                }?;
                 last_logits = Some(logits.squeeze(0)?);
                 idx = end;
             }
@@ -359,10 +353,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 let input  = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
                 let logits = {
                     let mut ctx = context.lock().unwrap();
-                    let out = ctx.generate(&input)?;
-                    drop(ctx);
-                    out
-                };
+                    ctx.generate(&input)
+                }?;
                 let logits = logits.squeeze(0)?;
 
                 // Repeat-penalty handling
@@ -455,26 +447,23 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Execute each tool call and append the tool response messages
             for tc in tool_calls {
                 // Find the tool to get its error strategy and retry settings
-                let tool = self
-                    .model
-                    .lock()
-                    .unwrap()
-                    .registered_tools()
-                    .into_iter()
-                    .find(|t| t.name() == tc.name)
-                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
+                let tool = {
+                    let mdl = self.model.lock().unwrap();
+                    mdl.registered_tools()
+                }
+                .into_iter()
+                .find(|t| t.name() == tc.name)
+                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
                 let mut last_error = None;
                 let mut success = false;
 
                 // Retry loop
                 for attempt in 0..=tool.max_retries() {
-                    match self
-                        .model
-                        .lock()
-                        .unwrap()
-                        .call_tool(tc.name.clone(), tc.arguments.clone())
-                    {
+                    match {
+                        let mut mdl = self.model.lock().unwrap();
+                        mdl.call_tool(tc.name.clone(), tc.arguments.clone())
+                    } {
                         Ok(result) => {
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
@@ -568,26 +557,23 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Execute each tool call and append the tool response messages
             for tc in tool_calls {
                 // Find the tool to get its error strategy and retry settings
-                let tool = self
-                    .model
-                    .lock()
-                    .unwrap()
-                    .registered_tools()
-                    .into_iter()
-                    .find(|t| t.name() == tc.name)
-                    .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
+                let tool = {
+                    let mdl = self.model.lock().unwrap();
+                    mdl.registered_tools()
+                }
+                .into_iter()
+                .find(|t| t.name() == tc.name)
+                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tc.name))?;
 
                 let mut last_error = None;
                 let mut success = false;
 
                 // Retry loop
                 for attempt in 0..=tool.max_retries() {
-                    match self
-                        .model
-                        .lock()
-                        .unwrap()
-                        .call_tool(tc.name.clone(), tc.arguments.clone())
-                    {
+                    match {
+                        let mut mdl = self.model.lock().unwrap();
+                        mdl.call_tool(tc.name.clone(), tc.arguments.clone())
+                    } {
                         Ok(result) => {
                             messages.push(crate::Message {
                                 role: "tool".to_string(),
