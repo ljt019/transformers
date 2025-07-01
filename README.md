@@ -151,7 +151,7 @@ fn main() -> anyhow::Result<()> {
     let size = ModernBertSize::Base;
 
     // 2. Build the pipeline
-    let pipeline = FillMaskPipelineBuilder::new(size).build()?;
+    let pipeline = FillMaskPipelineBuilder::modernbert(size).build()?;
 
     // 3. Fill the mask
     let prompt = "The capital of France is [MASK].";
@@ -173,7 +173,7 @@ fn main() -> Result<()> {
     let size = SentimentModernBertSize::Base;
 
     // 2. Build the pipeline
-    let pipeline = SentimentAnalysisPipelineBuilder::new(size).build()?;
+    let pipeline = SentimentAnalysisPipelineBuilder::modernbert(size).build()?;
 
     // 3. Analyze sentiment
     let sentence = "I love using Rust for my projects!";
@@ -198,7 +198,7 @@ fn main() -> Result<()> {
     let size = ZeroShotModernBertSize::Base;
 
     // 2. Build the pipeline
-    let pipeline = ZeroShotClassificationPipelineBuilder::new(size).build()?;
+    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(size).build()?;
 
     // 3. Classify text using candidate labels
     let text = "The Federal Reserve raised interest rates.";

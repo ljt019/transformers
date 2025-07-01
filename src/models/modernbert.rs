@@ -737,6 +737,22 @@ impl FillMaskModernBertModel {
     }
 }
 
+impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel for FillMaskModernBertModel {
+    type Options = ModernBertSize;
+
+    fn new(options: Self::Options) -> anyhow::Result<Self> {
+        FillMaskModernBertModel::new(options)
+    }
+
+    fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
+        self.predict(tokenizer, text)
+    }
+
+    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+        Self::get_tokenizer(options)
+    }
+}
+
 /// Available sizes of the zero-shot ModernBERT model
 #[derive(Debug, Clone, Copy)]
 pub enum ZeroShotModernBertSize {
@@ -947,6 +963,34 @@ impl ZeroShotModernBertModel {
     }
 }
 
+impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classification_model::ZeroShotClassificationModel
+    for ZeroShotModernBertModel
+{
+    type Options = ZeroShotModernBertSize;
+
+    fn new(options: Self::Options) -> anyhow::Result<Self> {
+        ZeroShotModernBertModel::new(options)
+    }
+
+    fn predict(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> AnyhowResult<Vec<(String, f32)>> {
+        self.predict(tokenizer, text, candidate_labels)
+    }
+
+    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+        let repo_id = Self::get_tokenizer_repo_info(options);
+        let api = Api::new()?;
+        let repo = api.repo(Repo::new(repo_id, RepoType::Model));
+        let tokenizer_filename = repo.get("tokenizer.json")?;
+        Tokenizer::from_file(tokenizer_filename)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
+    }
+}
+
 /// Available ModernBERT Sentiment model sizes.
 #[derive(Debug, Clone, Copy)]
 pub enum SentimentModernBertSize {
@@ -1105,6 +1149,29 @@ impl SentimentModernBertModel {
         let repo = api.repo(Repo::new(repo_id, RepoType::Model));
         let tokenizer_filename = repo.get("tokenizer.json")?;
 
+        Tokenizer::from_file(tokenizer_filename)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
+    }
+}
+
+impl crate::pipelines::sentiment_analysis_pipeline::sentiment_analysis_model::SentimentAnalysisModel
+    for SentimentModernBertModel
+{
+    type Options = SentimentModernBertSize;
+
+    fn new(options: Self::Options) -> anyhow::Result<Self> {
+        SentimentModernBertModel::new(options)
+    }
+
+    fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
+        self.predict(tokenizer, text)
+    }
+
+    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+        let repo_id = Self::get_tokenizer_repo_info(options);
+        let api = Api::new()?;
+        let repo = api.repo(Repo::new(repo_id, RepoType::Model));
+        let tokenizer_filename = repo.get("tokenizer.json")?;
         Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
     }

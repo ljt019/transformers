@@ -1,17 +1,13 @@
-use crate::models::modernbert::{ZeroShotModernBertModel, ZeroShotModernBertSize};
+use super::zero_shot_classification_model::ZeroShotClassificationModel;
 use tokenizers::Tokenizer;
 
-pub struct ZeroShotClassificationPipeline {
-    pub(crate) model: ZeroShotModernBertModel,
+pub struct ZeroShotClassificationPipeline<M: ZeroShotClassificationModel> {
+    pub(crate) model: M,
     pub(crate) tokenizer: Tokenizer,
 }
 
-impl ZeroShotClassificationPipeline {
+impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipeline<M> {
     pub fn predict(&self, text: &str, candidate_labels: &[&str]) -> anyhow::Result<Vec<(String, f32)>> {
         self.model.predict(&self.tokenizer, text, candidate_labels)
-    }
-
-    pub fn get_tokenizer(&self, size: ZeroShotModernBertSize) -> anyhow::Result<Tokenizer> {
-        self.model.get_tokenizer(size)
     }
 }

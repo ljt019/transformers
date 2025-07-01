@@ -1,12 +1,12 @@
-use crate::models::modernbert::{SentimentModernBertModel, SentimentModernBertSize};
+use super::sentiment_analysis_model::SentimentAnalysisModel;
 use tokenizers::Tokenizer;
 
-pub struct SentimentAnalysisPipeline {
-    pub(crate) model: SentimentModernBertModel,
+pub struct SentimentAnalysisPipeline<M: SentimentAnalysisModel> {
+    pub(crate) model: M,
     pub(crate) tokenizer: Tokenizer,
 }
 
-impl SentimentAnalysisPipeline {
+impl<M: SentimentAnalysisModel> SentimentAnalysisPipeline<M> {
     pub fn predict(&self, text: &str) -> anyhow::Result<String> {
         self.model.predict(&self.tokenizer, text)
     }

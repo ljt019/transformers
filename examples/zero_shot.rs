@@ -5,7 +5,7 @@ fn main() -> Result<()> {
     println!("Building pipeline...");
 
     // 1. Create the pipeline, using the builder to configure the model
-    let mut pipeline = ZeroShotClassificationPipelineBuilder::new(ZeroShotModernBertSize::Base);
+    let mut pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ZeroShotModernBertSize::Base);
 
     println!("Pipeline built successfully.");
 
