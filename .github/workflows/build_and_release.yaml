@@ -41,6 +41,9 @@ jobs:
     name: Publish tool_macro to crates.io
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      tool_macro_published: ${{ steps.check_and_publish.outputs.published }}
+      tool_macro_version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -50,12 +53,35 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Publish tool_macro crate
+      - name: Get tool_macro version
+        id: get_version
+        run: echo "::set-output name=version::$(grep '^version =' tool_macro/Cargo.toml | cut -d '"' -f 2)"
+
+      - name: Check if version exists and publish
+        id: check_and_publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
           cd tool_macro
-          cargo publish --allow-dirty
+          VERSION="${{ steps.get_version.outputs.version }}"
+          
+          echo "Attempting to publish tool_macro version $VERSION..."
+          
+          # Try to publish, capture output and exit code
+          if output=$(cargo publish --allow-dirty 2>&1); then
+            echo "Successfully published tool_macro version $VERSION"
+            echo "::set-output name=published::true"
+          else
+            echo "Publish command output: $output"
+            if echo "$output" | grep -q "already exists"; then
+              echo "Version $VERSION already exists on crates.io, skipping publish"
+              echo "::set-output name=published::false"
+            else
+              echo "Publish failed for other reasons:"
+              echo "$output"
+              exit 1
+            fi
+          fi
 
   update_and_publish_main:
     name: Update dependency and publish main crate
@@ -73,12 +99,13 @@ jobs:
       - name: Update tool_macro dependency
         run: |
           # Get the tool_macro version
-          TOOL_MACRO_VERSION=$(grep '^version =' tool_macro/Cargo.toml | cut -d '"' -f 2)
+          TOOL_MACRO_VERSION="${{ needs.publish_tool_macro.outputs.tool_macro_version }}"
           
           # Update the main Cargo.toml to use published version instead of path
           sed -i "s/tool_macro = { path = \"\.\/tool_macro\", version = \"[^\"]*\" }/tool_macro = \"$TOOL_MACRO_VERSION\"/" Cargo.toml
 
       - name: Wait for crates.io propagation
+        if: needs.publish_tool_macro.outputs.tool_macro_published == 'true'
         run: sleep 30
 
       - name: Publish main crate
