@@ -4,8 +4,7 @@ use transformers::pipelines::sentiment_analysis_pipeline::*;
 fn main() -> Result<()> {
     println!("Building pipeline...");
 
-    let pipeline =
-        SentimentAnalysisPipelineBuilder::modernbert(SentimentModernBertSize::Base).build()?;
+    let pipeline = SentimentAnalysisPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
     println!("Pipeline built successfully.");
 

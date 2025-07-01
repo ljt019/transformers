@@ -165,12 +165,12 @@ fn main() -> anyhow::Result<()> {
 ### Sentiment Analysis (ModernBERT Finetune)
 
 ```rust
-use transformers::pipelines::sentiment_analysis_pipeline::{SentimentAnalysisPipelineBuilder, SentimentModernBertSize};
+use transformers::pipelines::sentiment_analysis_pipeline::{SentimentAnalysisPipelineBuilder, ModernBertSize};
 use anyhow::Result;
 
 fn main() -> Result<()> {
     // 1. Choose a model size (Base or Large)
-    let size = SentimentModernBertSize::Base;
+    let size = ModernBertSize::Base;
 
     // 2. Build the pipeline
     let pipeline = SentimentAnalysisPipelineBuilder::modernbert(size).build()?;
@@ -189,13 +189,13 @@ fn main() -> Result<()> {
 
 ```rust
 use transformers::pipelines::zero_shot_classification_pipeline::{
-    ZeroShotClassificationPipelineBuilder, ZeroShotModernBertSize,
+    ZeroShotClassificationPipelineBuilder, ModernBertSize,
 };
 use anyhow::Result;
 
 fn main() -> Result<()> {
     // 1. Choose a model size (Base or Large)
-    let size = ZeroShotModernBertSize::Base;
+    let size = ModernBertSize::Base;
 
     // 2. Build the pipeline
     let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(size).build()?;

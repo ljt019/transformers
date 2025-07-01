@@ -23,7 +23,7 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
 }
 
 impl ZeroShotClassificationPipelineBuilder<crate::models::modernbert::ZeroShotModernBertModel> {
-    pub fn modernbert(size: crate::models::modernbert::ZeroShotModernBertSize) -> Self {
+    pub fn modernbert(size: crate::models::modernbert::ModernBertSize) -> Self {
         Self::new(size)
     }
 }

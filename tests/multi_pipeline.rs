@@ -1,6 +1,5 @@
+use transformers::pipelines::global_cache;
 use transformers::pipelines::text_generation_pipeline::*;
-use transformers::models::quantized_qwen3::Qwen3Size;
-use transformers::pipelines::utils::model_cache::global_cache;
 
 #[test]
 fn multiple_pipelines_share_weights_and_have_independent_caches() -> anyhow::Result<()> {
@@ -27,7 +26,12 @@ fn multiple_pipelines_share_weights_and_have_independent_caches() -> anyhow::Res
 
     // Other pipelines should remain untouched
     for (idx, p) in pipelines.iter().enumerate().skip(1) {
-        assert_eq!(p.context_position(), 0, "pipeline {} reused context", idx + 1);
+        assert_eq!(
+            p.context_position(),
+            0,
+            "pipeline {} reused context",
+            idx + 1
+        );
     }
 
     Ok(())

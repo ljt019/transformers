@@ -5,7 +5,7 @@ fn main() -> Result<()> {
     println!("Building pipeline...");
 
     let pipeline =
-        ZeroShotClassificationPipelineBuilder::modernbert(ZeroShotModernBertSize::Base).build()?;
+        ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
     println!("Pipeline built successfully.");
 

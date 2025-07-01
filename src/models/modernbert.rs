@@ -759,13 +759,6 @@ impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel
     }
 }
 
-/// Available sizes of the zero-shot ModernBERT model
-#[derive(Debug, Clone, Copy)]
-pub enum ZeroShotModernBertSize {
-    Base,
-    Large,
-}
-
 /// Zero-shot classification model using ModernBERT
 #[derive(Clone)]
 pub struct ZeroShotModernBertModel {
@@ -775,16 +768,12 @@ pub struct ZeroShotModernBertModel {
 }
 
 impl ZeroShotModernBertModel {
-    pub fn new(size: ZeroShotModernBertSize) -> AnyhowResult<Self> {
+    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
         let device = load_device()?;
 
         let model_id = match size {
-            ZeroShotModernBertSize::Base => {
-                "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string()
-            }
-            ZeroShotModernBertSize::Large => {
-                "MoritzLaurer/ModernBERT-large-zeroshot-v2.0".to_string()
-            }
+            ModernBertSize::Base => "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string(),
+            ModernBertSize::Large => "MoritzLaurer/ModernBERT-large-zeroshot-v2.0".to_string(),
         };
 
         let api = Api::new()?;
@@ -987,18 +976,14 @@ impl ZeroShotModernBertModel {
         Ok(results)
     }
 
-    pub fn get_tokenizer_repo_info(size: ZeroShotModernBertSize) -> String {
+    pub fn get_tokenizer_repo_info(size: ModernBertSize) -> String {
         match size {
-            ZeroShotModernBertSize::Base => {
-                "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string()
-            }
-            ZeroShotModernBertSize::Large => {
-                "MoritzLaurer/ModernBERT-large-zeroshot-v2.0".to_string()
-            }
+            ModernBertSize::Base => "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string(),
+            ModernBertSize::Large => "MoritzLaurer/ModernBERT-large-zeroshot-v2.0".to_string(),
         }
     }
 
-    pub fn get_tokenizer(&self, size: ZeroShotModernBertSize) -> AnyhowResult<Tokenizer> {
+    pub fn get_tokenizer(&self, size: ModernBertSize) -> AnyhowResult<Tokenizer> {
         let repo_id = Self::get_tokenizer_repo_info(size);
         let api = Api::new()?;
         let repo = api.repo(Repo::new(repo_id, RepoType::Model));
@@ -1012,7 +997,7 @@ impl ZeroShotModernBertModel {
 impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classification_model::ZeroShotClassificationModel
     for ZeroShotModernBertModel
 {
-    type Options = ZeroShotModernBertSize;
+    type Options = ModernBertSize;
 
     fn new(options: Self::Options) -> anyhow::Result<Self> {
         ZeroShotModernBertModel::new(options)
@@ -1046,13 +1031,6 @@ impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classificati
     }
 }
 
-/// Available ModernBERT Sentiment model sizes.
-#[derive(Debug, Clone, Copy)]
-pub enum SentimentModernBertSize {
-    Base,
-    Large,
-}
-
 /// Sentiment analysis model using ModernBERT
 #[derive(Clone)]
 pub struct SentimentModernBertModel {
@@ -1062,16 +1040,12 @@ pub struct SentimentModernBertModel {
 }
 
 impl SentimentModernBertModel {
-    pub fn new(size: SentimentModernBertSize) -> AnyhowResult<Self> {
+    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
         let device = load_device()?;
 
         let model_id = match size {
-            SentimentModernBertSize::Base => {
-                "clapAI/modernBERT-base-multilingual-sentiment".to_string()
-            }
-            SentimentModernBertSize::Large => {
-                "clapAI/modernBERT-large-multilingual-sentiment".to_string()
-            }
+            ModernBertSize::Base => "clapAI/modernBERT-base-multilingual-sentiment".to_string(),
+            ModernBertSize::Large => "clapAI/modernBERT-large-multilingual-sentiment".to_string(),
         };
 
         let api = Api::new()?;
@@ -1187,18 +1161,14 @@ impl SentimentModernBertModel {
         Ok(predicted_label)
     }
 
-    pub fn get_tokenizer_repo_info(size: SentimentModernBertSize) -> String {
+    pub fn get_tokenizer_repo_info(size: ModernBertSize) -> String {
         match size {
-            SentimentModernBertSize::Base => {
-                "clapAI/modernBERT-base-multilingual-sentiment".to_string()
-            }
-            SentimentModernBertSize::Large => {
-                "clapAI/modernBERT-large-multilingual-sentiment".to_string()
-            }
+            ModernBertSize::Base => "clapAI/modernBERT-base-multilingual-sentiment".to_string(),
+            ModernBertSize::Large => "clapAI/modernBERT-large-multilingual-sentiment".to_string(),
         }
     }
 
-    pub fn get_tokenizer(&self, size: SentimentModernBertSize) -> AnyhowResult<Tokenizer> {
+    pub fn get_tokenizer(&self, size: ModernBertSize) -> AnyhowResult<Tokenizer> {
         let repo_id = Self::get_tokenizer_repo_info(size);
         let api = Api::new()?;
         let repo = api.repo(Repo::new(repo_id, RepoType::Model));
@@ -1212,7 +1182,7 @@ impl SentimentModernBertModel {
 impl crate::pipelines::sentiment_analysis_pipeline::sentiment_analysis_model::SentimentAnalysisModel
     for SentimentModernBertModel
 {
-    type Options = SentimentModernBertSize;
+    type Options = ModernBertSize;
 
     fn new(options: Self::Options) -> anyhow::Result<Self> {
         SentimentModernBertModel::new(options)

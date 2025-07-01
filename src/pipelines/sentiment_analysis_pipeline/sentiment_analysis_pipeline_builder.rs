@@ -23,7 +23,7 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
 }
 
 impl SentimentAnalysisPipelineBuilder<crate::models::modernbert::SentimentModernBertModel> {
-    pub fn modernbert(size: crate::models::modernbert::SentimentModernBertSize) -> Self {
+    pub fn modernbert(size: crate::models::modernbert::ModernBertSize) -> Self {
         Self::new(size)
     }
 }

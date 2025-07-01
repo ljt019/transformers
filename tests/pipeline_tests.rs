@@ -1,4 +1,3 @@
-use transformers::models::quantized_qwen3::Qwen3Size;
 use transformers::pipelines::fill_mask_pipeline::*;
 use transformers::pipelines::sentiment_analysis_pipeline::*;
 use transformers::pipelines::text_generation_pipeline::*;
@@ -63,7 +62,7 @@ fn basic_fill_mask() -> anyhow::Result<()> {
 #[test]
 fn basic_zero_shot_classification() -> anyhow::Result<()> {
     let pipeline =
-        ZeroShotClassificationPipelineBuilder::modernbert(ZeroShotModernBertSize::Base).build()?;
+        ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
     let labels = ["politics", "sports"];
     let res = pipeline.predict("The election results were surprising", &labels)?;
     assert_eq!(res.len(), 2);
@@ -72,8 +71,7 @@ fn basic_zero_shot_classification() -> anyhow::Result<()> {
 
 #[test]
 fn basic_sentiment() -> anyhow::Result<()> {
-    let pipeline =
-        SentimentAnalysisPipelineBuilder::modernbert(SentimentModernBertSize::Base).build()?;
+    let pipeline = SentimentAnalysisPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
     let res = pipeline.predict("I love Rust!")?;
     assert!(!res.trim().is_empty());
     Ok(())
