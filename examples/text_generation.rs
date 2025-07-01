@@ -11,8 +11,7 @@ fn main() -> Result<()> {
         .build()?;
 
     // Get a completion from a prompt.
-    let completion = pipeline
-        .prompt_completion("Explain the concept of Large Language Models in simple terms.")?;
+    let completion = pipeline.completion("Explain the concept of Large Language Models in simple terms.")?;
 
     println!("\n--- Generated Text ---");
     println!("{}", completion);
@@ -23,7 +22,7 @@ fn main() -> Result<()> {
         Message::user("What is the capital of France?"),
     ];
 
-    let completion = pipeline.message_completion(&messages)?;
+    let completion = pipeline.completion(&messages)?;
 
     println!("\n--- Generated Text 2 ---");
     println!("{}", completion);
@@ -33,7 +32,7 @@ fn main() -> Result<()> {
     messages.push(Message::user("What are some fun things to do there?"));
 
     // Now ask a follow-up question.
-    let completion = pipeline.message_completion(&messages)?;
+    let completion = pipeline.completion(&messages)?;
 
     println!("\n--- Generated Text 3 (Follow-up) ---");
     println!("{}", completion);

@@ -10,7 +10,7 @@ fn basic_text_generation() -> anyhow::Result<()> {
         .temperature(0.7)
         .max_len(8)
         .build()?;
-    let out = pipeline.prompt_completion("Rust is a")?;
+    let out = pipeline.completion("Rust is a")?;
     assert!(!out.trim().is_empty());
     Ok(())
 }
@@ -27,7 +27,7 @@ fn basic_tool_use() -> anyhow::Result<()> {
         .max_len(150)
         .build()?;
     pipeline.register_tools(tools![get_weather])?;
-    let out = pipeline.prompt_completion_with_tools("What's the weather like in Paris today?")?;
+    let out = pipeline.completion_with_tools("What's the weather like in Paris today?")?;
     println!("{}", out);
     assert!(out.contains(
         "<tool_response name=\"get_weather\">\nThe weather in Paris is sunny.\n</tool_response>"
@@ -41,7 +41,7 @@ async fn basic_streaming() -> anyhow::Result<()> {
         .seed(42)
         .max_len(8)
         .build()?;
-    let mut stream = pipeline.prompt_completion_stream("Hello")?;
+    let mut stream = pipeline.completion_stream("Hello")?;
     let mut acc = String::new();
     use futures::StreamExt;
     while let Some(tok) = stream.next().await {

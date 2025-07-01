@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     pipeline.register_tools(tools![get_temperature, get_humidity])?;
 
     let mut stream =
-        pipeline.prompt_completion_stream_with_tools("What's the weather like in Tokyo?")?;
+        pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
 
     while let Some(tok) = stream.next().await {
         print!("{}", tok);
