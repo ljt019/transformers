@@ -1,77 +1,183 @@
-pub mod raw;
-pub mod shared;
+pub mod generation;
+pub mod quantized_nn;
 
-pub mod modern_bert;
-pub mod sentiment_modern_bert;
-pub mod zero_shot_modern_bert;
+pub mod modernbert;
+pub mod quantized_gemma3;
+pub mod quantized_qwen3;
 
-pub mod gemma_3;
-pub mod phi_4;
-pub mod qwen_3;
+pub use quantized_nn::RmsNorm;
 
-pub use raw::generation::{apply_repeat_penalty, initialize_logits_processor};
+pub use quantized_gemma3::Gemma3Size;
+pub use quantized_qwen3::Qwen3Size;
 
-trait ModelWeightForward {
-    fn forward(
-        &mut self,
-        xs: &candle_core::Tensor,
-        start_pos: usize,
-    ) -> candle_core::Result<candle_core::Tensor>;
+use candle_core::{Result, Tensor};
+use candle_nn::Module;
+
+pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
+    let device = logits.device();
+    let mut logits = logits.to_dtype(candle_core::DType::F32)?.to_vec1::<f32>()?;
+    let mut already_seen = std::collections::HashSet::new();
+    for token_id in context {
+        if already_seen.contains(token_id) {
+            continue;
+        }
+        already_seen.insert(token_id);
+        if let Some(logit) = logits.get_mut(*token_id as usize) {
+            if *logit >= 0. {
+                *logit /= penalty
+            } else {
+                *logit *= penalty
+            }
+        }
+    }
+    let logits_len = logits.len();
+    Tensor::from_vec(logits, logits_len, device)
 }
 
-use candle_core::{Device, Tensor};
+/// Repeats a key or value tensor for grouped query attention
+/// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
+pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
+    if n_rep == 1 {
+        Ok(xs)
+    } else {
+        let (b_sz, n_kv_head, seq_len, head_dim) = xs.dims4()?;
+        // Using cat is faster than a broadcast as it avoids going through a potentially
+        // strided copy.
+        // https://github.com/huggingface/candle/pull/2043
+        Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+    }
+}
 
-fn generate_tokens_from_prompt<M: ModelWeightForward>(
-    prompt_tokens: &[u32],
-    params: &raw::generation::GenerationParams,
-    model_weights: &mut M,
-    max_len: usize,
-    device: &Device,
-    eos_token_id: u32,
-) -> anyhow::Result<Vec<u32>> {
-    let prompt_len = prompt_tokens.len();
+// QMatMul wrapper adding some tracing.
+#[derive(Clone)]
+pub struct QMatMul {
+    inner: candle_core::quantized::QMatMul,
+    span: tracing::Span,
+}
 
-    let mut logits_processor = initialize_logits_processor(params, params.seed);
-    let mut all_generated_tokens: Vec<u32> = Vec::with_capacity(max_len);
-
-    // 1 x L (batch and seq_len)
-    let input = Tensor::new(prompt_tokens, device)?.unsqueeze(0)?;
-
-    // 1 x 1 x V (batch, seq_len, vocab_size)
-    let logits = model_weights.forward(&input, 0)?;
-
-    // 1 x V (seq_len, vocab_size)
-    let logits = logits.squeeze(0)?;
-
-    // 1 (seq_len)
-    let mut next_token = logits_processor.sample(&logits)?;
-    all_generated_tokens.push(next_token);
-
-    for index in 0..max_len {
-        if next_token == eos_token_id {
-            break;
-        }
-
-        let context_size = prompt_len + index;
-
-        let input = Tensor::new(&[next_token], device)?.unsqueeze(0)?;
-        let logits = model_weights.forward(&input, context_size)?;
-        let logits = logits.squeeze(0)?;
-
-        let start_at = all_generated_tokens
-            .len()
-            .saturating_sub(params.repeat_last_n);
-        let penalty_context = &all_generated_tokens[start_at..];
-
-        let logits = if params.repeat_penalty <= 1. || penalty_context.is_empty() {
-            logits
-        } else {
-            apply_repeat_penalty(&logits, params.repeat_penalty, penalty_context)?
-        };
-
-        next_token = logits_processor.sample(&logits)?;
-        all_generated_tokens.push(next_token);
+impl QMatMul {
+    pub fn new(out_dim: usize, in_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let ws = vb.get((in_dim, out_dim), "weight")?;
+        let inner = candle_core::quantized::QMatMul::from_arc(ws)?;
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
+        Ok(Self { inner, span })
     }
 
-    Ok(all_generated_tokens)
+    pub fn from_weights(ws: std::sync::Arc<candle_core::quantized::QTensor>) -> Result<Self> {
+        let inner = candle_core::quantized::QMatMul::from_arc(ws)?;
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
+        Ok(Self { inner, span })
+    }
+}
+
+impl Module for QMatMul {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward(xs)
+    }
+}
+
+impl std::fmt::Debug for QMatMul {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "QMatMul")
+    }
+}
+
+use candle_core::quantized::QTensor;
+use candle_core::{Device, Shape};
+use std::sync::Arc;
+
+// VarBuilder specialized for QTensors
+#[derive(Clone)]
+pub struct VarBuilder {
+    data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
+    path: Vec<String>,
+    device: Device,
+}
+
+impl VarBuilder {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &Device) -> Result<Self> {
+        let mut file = std::fs::File::open(p)?;
+        let content = candle_core::quantized::gguf_file::Content::read(&mut file)?;
+        let mut data = std::collections::HashMap::new();
+        for tensor_name in content.tensor_infos.keys() {
+            let tensor = content.tensor(&mut file, tensor_name, device)?;
+            data.insert(tensor_name.to_string(), Arc::new(tensor));
+        }
+        Ok(Self {
+            data: Arc::new(data),
+            path: Vec::new(),
+            device: device.clone(),
+        })
+    }
+
+    pub fn from_gguf_buffer(buffer: &[u8], device: &Device) -> Result<Self> {
+        let mut cursor = std::io::Cursor::new(buffer);
+        let content = candle_core::quantized::gguf_file::Content::read(&mut cursor)?;
+        let mut data = std::collections::HashMap::new();
+        for tensor_name in content.tensor_infos.keys() {
+            let tensor = content.tensor(&mut cursor, tensor_name, device)?;
+            data.insert(tensor_name.to_string(), Arc::new(tensor));
+        }
+        Ok(Self {
+            data: Arc::new(data),
+            path: Vec::new(),
+            device: device.clone(),
+        })
+    }
+
+    pub fn pp<S: ToString>(&self, s: S) -> Self {
+        let mut path = self.path.clone();
+        path.push(s.to_string());
+        Self {
+            data: self.data.clone(),
+            path,
+            device: self.device.clone(),
+        }
+    }
+
+    fn path(&self, tensor_name: &str) -> String {
+        if self.path.is_empty() {
+            tensor_name.to_string()
+        } else {
+            [&self.path.join("."), tensor_name].join(".")
+        }
+    }
+
+    pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Arc<QTensor>> {
+        let path = self.path(name);
+        match self.data.get(&path) {
+            None => {
+                candle_core::bail!("cannot find tensor {path}")
+            }
+            Some(qtensor) => {
+                let shape = s.into();
+                if qtensor.shape() != &shape {
+                    candle_core::bail!(
+                        "shape mismatch for {name}, got {:?}, expected {shape:?}",
+                        qtensor.shape()
+                    )
+                }
+                Ok(qtensor.clone())
+            }
+        }
+    }
+
+    pub fn get_no_shape(&self, name: &str) -> Result<Arc<QTensor>> {
+        let path = self.path(name);
+        match self.data.get(&path) {
+            None => {
+                candle_core::bail!("cannot find tensor {name}")
+            }
+            Some(qtensor) => Ok(qtensor.clone()),
+        }
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.data.contains_key(key)
+    }
 }
