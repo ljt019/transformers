@@ -7,14 +7,6 @@
 //! - GPU acceleration via Candle framework
 //! - Sliding window attention patterns
 //!
-//! # Quick Start
-//! ```rust
-//! use std::fs::File;
-//! let mut file = File::open("model.gguf")?;
-//! let model = Gemma3Model::from_gguf(&mut file, &Device::Cpu)?;
-//! let mut ctx = model.new_context();
-//! let output = ctx.generate(&input_tokens)?;
-//! ```
 
 use candle_core::quantized::{gguf_file, QMatMul};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};

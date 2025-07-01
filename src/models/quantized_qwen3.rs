@@ -6,14 +6,6 @@
 //! - Multi-context support for concurrent conversations
 //! - GPU acceleration via Candle framework
 //!
-//! # Quick Start
-//! ```rust
-//! use std::fs::File;
-//! let mut file = File::open("model.gguf")?;
-//! let model = Qwen3Model::from_gguf(&mut file, &Device::Cpu)?;
-//! let mut ctx = model.new_context();
-//! let output = ctx.generate(&input_tokens)?;
-//! ```
 
 use crate::models::RmsNorm;
 use candle_core::quantized::{gguf_file, QMatMul};
