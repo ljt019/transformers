@@ -25,7 +25,7 @@ fn get_temperature(city: String) -> Result<String, ToolError> {
 async fn main() -> Result<()> {
     println!("Building pipeline...");
 
-    let mut pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(8192)
         .build()?;
 

@@ -7,14 +7,6 @@
 //! - GPU acceleration via Candle framework
 //! - Sliding window attention patterns
 //!
-//! # Quick Start
-//! ```rust
-//! use std::fs::File;
-//! let mut file = File::open("model.gguf")?;
-//! let model = Gemma3Model::from_gguf(&mut file, &Device::Cpu)?;
-//! let mut ctx = model.new_context();
-//! let output = ctx.generate(&input_tokens)?;
-//! ```
 
 use candle_core::quantized::{gguf_file, QMatMul};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -615,7 +607,7 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
-use crate::pipelines::utils::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
 /// High-level Gemma3 model interface for text generation.
@@ -631,10 +623,8 @@ impl Gemma3Model {
     /// Load and prepare the chat template environment
     fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
-        let tokenizer_config_loader = crate::pipelines::utils::loaders::HfLoader::new(
-            "google/gemma-3-1b-it",
-            "tokenizer_config.json",
-        );
+        let tokenizer_config_loader =
+            crate::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load()?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;

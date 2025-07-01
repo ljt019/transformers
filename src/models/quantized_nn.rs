@@ -4,8 +4,8 @@
 //! utilities including embedding, linear layers, and various normalization techniques.
 //! Most implementations provide quantized weights support.
 
-use super::quantized_var_builder::VarBuilder;
-use super::utils::QMatMul;
+use super::QMatMul;
+use super::VarBuilder;
 use candle_core::quantized::QTensor;
 use candle_core::{Module, Result, Tensor};
 

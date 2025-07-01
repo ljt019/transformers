@@ -1,4 +1,4 @@
-use crate::pipelines::utils::loaders::GgufModelLoader;
+use crate::loaders::GgufModelLoader;
 use candle_core::quantized::gguf_file;
 use candle_core::Device;
 use std::collections::HashMap;

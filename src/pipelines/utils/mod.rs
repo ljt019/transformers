@@ -2,7 +2,6 @@ use candle_core::{CudaDevice, Device};
 
 pub mod configs;
 pub mod gguf_cache;
-pub mod loaders;
 pub mod model_cache;
 
 /// Loads a device to be used for the model. Uses CUDA by default, falling back to CPU if CUDA is not available.

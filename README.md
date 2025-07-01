@@ -10,22 +10,16 @@
 
 Transformers provides a simple, intuitive interface for Rust developers who want to work with Large Language Models locally, powered by the [Candle](https://github.com/huggingface/candle) crate. It offers an API inspired by Python's [Transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
-## Performance Optimizations
+## Supported Pipelines
 
-**Model Weight Caching**: When creating multiple pipelines with the same model and size, the crate automatically caches and reuses the model weights in memory. This means that subsequent pipeline creation is significantly faster, as only new KV caches are allocated for each pipeline instance, while the expensive model weights are shared. This is particularly beneficial for applications that need multiple instances of the same model for parallel processing or different configurations.
+- Text Generation
+- Sentiment Analysis
+- Zero Shot Classification
+- Fill Mask
 
-## Supported Models & Pipelines
+## Currently Implemented Models
 
-**Text Generation**:
-
-- [Gemma3](https://huggingface.co/google/gemma-3-27b-it)
-  - 1B
-  - 4B
-  - 12B
-  - 27B
-- [Phi4](https://huggingface.co/microsoft/phi-4)
-  - 14B
-- [Qwen3](https://huggingface.co/Qwen/Qwen3-32B)
+- [Qwen3](https://huggingface.co/Qwen/Qwen3-0.6B) (Text Generation)
   - 0.6B
   - 1.7B
   - 4B
@@ -33,69 +27,54 @@ Transformers provides a simple, intuitive interface for Rust developers who want
   - 14B
   - 32B
 
-**Fill-Mask**:
-
-- [ModernBERT](https://huggingface.co/answerdotai/ModernBERT-base)
+- [Gemma3](https://huggingface.co/google/gemma-3-27b-it) (Text Generation)
+  - 1B
+  - 4B
+  - 12B
+  - 27B
+  
+- ModernBERT ([ZeroShot](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0), [Sentiment Analysis](https://huggingface.co/clapAI/modernBERT-base-multilingual-sentiment), [Fill Mask](https://huggingface.co/answerdotai/ModernBERT-base))
   - Base
   - Large
 
-**Sentiment Analysis**:
-
-- [ModernBERT-multilingual-sentiment](https://huggingface.co/clapAI/modernBERT-base-multilingual-sentiment)
-  - Base
-  - Large
-
-**Zero-Shot Classification**:
-
-- [ModernBERT-zeroshot](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0)
-  - Base
-  - Large
-
-## Installation
-
-```cmd
-cargo add transformers
-```
+All ModernBERT-based pipelines share the same backbone architecture while loading task-specific finetuned checkpoints.
 
 ## Usage
 
-At this point in development the only real way to interact with the models is through the given pipelines, I plan to eventually provide you with a simple interface to work with the models directly if you would like.
+At this point in development the only way to interact with the models is through the given pipelines, I plan to eventually provide a simple interface to work with the models directly.
 
 Inference will be quite slow at the moment, this is mostly due to not using the CUDA feature when compiling candle. I will be working on integrating this smoothly in future updates for much faster inference.
 
-Some examples of how to use the existing pipelines:
-
 ### Text Generation
 
-There are two ways to generate text: by providing a simple prompt string, or by providing a list of messages for chat-like interactions.
+There are two basic ways to generate text:
 
-#### Using `prompt_completion`
+1. By providing a simple prompt string.
+2. By providing a list of messages for chat-like interactions.
+
+#### Providing a single prompt
+
+Use the `prompt_completion` method for straightforward text generation from a single prompt string.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::{
-    TextGenerationPipelineBuilder, ModelOptions, Qwen3Size,
-};
+use transformers::pipelines::text_generation_pipeline::*;
 
-fn main() {
-    // 1. Choose a model family and size
-    let model_choice = ModelOptions::Qwen3(Qwen3Size::Size0_6B);
-
-    // 2. Build the pipeline with optional parameters
-    let pipeline = TextGenerationPipelineBuilder::new(model_choice)
+fn main() -> anyhow::Result<()> {
+    // 1. Create the pipeline
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .temperature(0.7)
-        .repeat_penalty(1.1)
-        .build().unwrap();
+        .top_k(40)
+        .build()?;
 
-    // 3. Generate text from a prompt
-    let prompt = "Explain the concept of Large Language Models in simple terms.";
-    let max_tokens = 100;
+    // 2. Generate a completion
+    let completion = pipeline.prompt_completion(prompt)?;
+    println!("{}", completion);
 
-    let generated = pipeline.prompt_completion(prompt, max_tokens).unwrap();
-    println!("{}", generated);
+    Ok(())
 }
 ```
 
-#### Using `message_completion` with the `Message` Type
+#### Providing a list of messages
 
 For more conversational interactions, you can use the `message_completion` method, which takes a vector of `Message` structs.
 
@@ -106,33 +85,100 @@ The `Message` struct represents a single message in a chat and has a `role` (sys
 - `Message::assistant(content: &str)`: For model responses.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::{
-    TextGenerationPipelineBuilder, ModelOptions, Phi4Size,
-};
-use transformers::Message; // Import the Message type
+use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation_pipeline::Messages;
 
 fn main() -> anyhow::Result<()> {
-    // 1. Choose a model family and size
-    let model_choice = ModelOptions::Phi4(Phi4Size::Size14B); // Example with a different model
-
-    // 2. Build the pipeline
-    let pipeline = TextGenerationPipelineBuilder::new(model_choice)
-        .temperature(0.8)
+    // 1. Create the pipeline
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .temperature(0.7)
+        .top_k(40)
         .build()?;
 
-    // 3. Create a sequence of messages
-    let messages = vec![
-        Message::system("You are a friendly and helpful AI assistant."),
-        Message::user("What is the capital of France?"),
+    // 2. Create the messages
+    let mut messages = vec![
+        Message::system("You are a helpful assistant."),
+        Message::user("What is the meaning of life?"),
     ];
-    let max_tokens = 50;
 
-    // 4. Generate a completion based on the messages
-    let generated_response = pipeline.message_completion(messages, max_tokens)?;
-    println!("Assistant: {}", generated_response);
+    // 3. Generate a completion
+    let completion = pipeline.message_completion(&messages)?;
+    println!("{}", completion);
 
-    // You can continue the conversation by adding the assistant's response
-    // and a new user message to the messages vector.
+    Ok(())
+}
+```
+
+#### Tool Calling
+
+Using tools with models is also made extremely easy, you just define tools using the `tool` macro and make sure to register them with the pipeline and you are good to go.
+
+Using the tools is as easy as calling `prompt_completion_with_tools` after having tools registered to the pipeline. Of course there also exists a `message_completion_with_tools` method if you'd like to use tools in a conversational context.
+
+```rust
+use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation_pipeline::Messages;
+
+// 1. Define the tools
+#[tool]
+/// Get the weather for a given city in degrees celsius.
+fn get_temperature(city: String) -> Result<String, ToolError> {
+    return Ok(format!(
+        "The temperature is 20 degrees celsius in {}.",
+        city
+    ));
+}
+
+fn main() -> anyhow::Result<()> {
+    // 2. Create the pipeline
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .max_len(8192)
+        .build()?;
+
+    println!("Pipeline built successfully.");
+
+    // 3. Register the tools
+    pipeline.register_tools(tools![get_temperature, get_humidity])?;
+
+    // 4. Get a completion
+    let completion = pipeline.prompt_completion_with_tools("What's the weather like in Tokyo?")
+    println!("{}", completion);
+
+    Ok(())
+}
+```
+
+#### Streaming Completions
+
+For each of the above methods, so for regular generation, and for tool calling there exist streaming versions
+
+- `prompt_completion_stream`
+- `message_completion_stream`
+- `prompt_completion_stream_with_tools`
+- `message_completion_stream_with_tools`
+
+Instead of returning the completion these methods return a stream you can iterate on to receive tokens individually as they are generated by the model instead of just receiving them all at once at the end.
+
+```rust
+use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation_pipeline::Messages;
+
+fn main() -> anyhow::Result<()> {
+    // 1. Create the pipeline
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .max_len(1024)
+        .build()?;
+
+    // 2. Get a completion using stream method
+    let mut stream = pipeline.prompt_completion_stream(
+        "Explain the concept of Large Language Models in simple terms.",
+    )?;
+
+    // 3. Do something with tokens as they are generated
+    while let Some(tok) = stream.next().await {
+        print!("{}", tok);
+        std::io::stdout().flush().unwrap();
+    }
 
     Ok(())
 }
@@ -146,13 +192,10 @@ use transformers::pipelines::fill_mask_pipeline::{
 };
 
 fn main() -> anyhow::Result<()> {
-    // 1. Choose a model size (Base or Large)
-    let size = ModernBertSize::Base;
+    // 1. Build the pipeline
+    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base;).build()?;
 
-    // 2. Build the pipeline
-    let pipeline = FillMaskPipelineBuilder::new(size).build()?;
-
-    // 3. Fill the mask
+    // 2. Fill the mask
     let prompt = "The capital of France is [MASK].";
     let filled_text = pipeline.fill_mask(prompt)?;
 
@@ -164,19 +207,15 @@ fn main() -> anyhow::Result<()> {
 ### Sentiment Analysis (ModernBERT Finetune)
 
 ```rust
-use transformers::pipelines::sentiment_analysis_pipeline::{SentimentAnalysisPipelineBuilder, SentimentModernBertSize};
+use transformers::pipelines::sentiment_analysis_pipeline::{SentimentAnalysisPipelineBuilder, ModernBertSize};
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    // 1. Choose a model size (Base or Large)
-    let size = SentimentModernBertSize::Base;
+    // 1. Build the pipeline
+    let pipeline = SentimentAnalysisPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
-    // 2. Build the pipeline
-    let pipeline = SentimentAnalysisPipelineBuilder::new(size).build()?;
-
-    // 3. Analyze sentiment
-    let sentence = "I love using Rust for my projects!";
-    let sentiment = pipeline.predict(sentence)?;
+    // 2. Analyze sentiment
+    let sentiment = pipeline.predict("I love using Rust for my projects!")?;
 
     println!("Text: {}", sentence);
     println!("Predicted Sentiment: {}", sentiment); // Should predict positive sentiment
@@ -186,30 +225,32 @@ fn main() -> Result<()> {
 
 ### Zero-Shot Classification (ModernBERT NLI Finetune)
 
+Zero-shot classification offers two methods for different use cases:
+
+#### Single-Label Classification (`predict`)
+
+Use when you want to classify text into one of several **mutually exclusive** categories. Probabilities sum to 1.0.
+
 ```rust
 use transformers::pipelines::zero_shot_classification_pipeline::{
-    ZeroShotClassificationPipelineBuilder, ZeroShotModernBertSize,
+    ZeroShotClassificationPipelineBuilder, ModernBertSize,
 };
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    // 1. Choose a model size (Base or Large)
-    let size = ZeroShotModernBertSize::Base;
+    // 1. Build the pipeline
+    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
 
-    // 2. Build the pipeline
-    let pipeline = ZeroShotClassificationPipelineBuilder::new(size).build()?;
-
-    // 3. Classify text using candidate labels
+    // 2. Single-label classification
     let text = "The Federal Reserve raised interest rates.";
-    let candidate_labels = &["economics", "politics", "sports", "technology"];
-    
-    let results = pipeline.predict(text, candidate_labels)?;
-    
+    let candidate_labels = ["economics", "politics", "technology", "sports"];
+    let results = pipeline.predict(text, &candidate_labels)?;
+
     println!("Text: {}", text);
     for (label, score) in results {
         println!("- {}: {:.4}", label, score);
     }
-    // Example output:
+    // Example output (probabilities sum to 1.0):
     // - economics: 0.8721
     // - politics: 0.1134
     // - technology: 0.0098
@@ -219,11 +260,43 @@ fn main() -> Result<()> {
 }
 ```
 
+#### Multi-Label Classification (`predict_multi_label`)
+
+Use when labels can be **independent** and multiple labels could apply to the same text. Returns raw entailment probabilities.
+
+```rust
+use transformers::pipelines::zero_shot_classification_pipeline::{
+    ZeroShotClassificationPipelineBuilder, ModernBertSize,
+};
+use anyhow::Result;
+
+fn main() -> Result<()> {
+    // 1. Build the pipeline
+    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
+
+    // 2. Multi-label classification
+    let text = "I love reading books about machine learning and artificial intelligence.";
+    let candidate_labels = ["technology", "education", "reading", "science"];
+    let results = pipeline.predict_multi_label(text, &candidate_labels)?;
+
+    println!("Text: {}", text);
+    for (label, score) in results {
+        println!("- {}: {:.4}", label, score);
+    }
+    // Example output (independent probabilities):
+    // - technology: 0.9234
+    // - education: 0.8456
+    // - reading: 0.9567
+    // - science: 0.7821
+    
+    Ok(())
+}
+```
+
 ## Future Plans
 
 - Add more model families and sizes
 - Support additional pipelines (summarization, classification)
-- Improve performance and error handling
 - CUDA support for faster inference
 - Direct model interface (beyond pipelines)
 
