@@ -7,7 +7,16 @@ pub trait ZeroShotClassificationModel {
     where
         Self: Sized;
 
+    /// Predict with normalized probabilities for single-label classification (probabilities sum to 1)
     fn predict(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> anyhow::Result<Vec<(String, f32)>>;
+
+    /// Predict with raw entailment probabilities for multi-label classification
+    fn predict_multi_label(
         &self,
         tokenizer: &Tokenizer,
         text: &str,

@@ -715,7 +715,11 @@ impl FillMaskModernBertModel {
         let logits = logits.squeeze(0)?.i((mask_index, ..))?;
         let probs = softmax(&logits, D::Minus1)?;
         let predicted = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
-        let token_str = tokenizer.decode(&[predicted], true).unwrap_or_default();
+        let token_str = tokenizer
+            .decode(&[predicted], true)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         Ok(text.replace("[MASK]", &token_str))
     }
 
@@ -737,7 +741,9 @@ impl FillMaskModernBertModel {
     }
 }
 
-impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel for FillMaskModernBertModel {
+impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel
+    for FillMaskModernBertModel
+{
     type Options = ModernBertSize;
 
     fn new(options: Self::Options) -> anyhow::Result<Self> {
@@ -862,7 +868,47 @@ impl ZeroShotModernBertModel {
     pub fn predict(
         &self,
         tokenizer: &Tokenizer,
-        premise: &str,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> AnyhowResult<Vec<(String, f32)>> {
+        self.predict_single_label(tokenizer, text, candidate_labels)
+    }
+
+    /// Predict with normalized probabilities for single-label classification (probabilities sum to 1)
+    pub fn predict_single_label(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> AnyhowResult<Vec<(String, f32)>> {
+        let mut results = self.predict_raw(tokenizer, text, candidate_labels)?;
+
+        // Normalize probabilities to sum to 1
+        let sum: f32 = results.iter().map(|(_, p)| p).sum();
+        if sum > 0.0 {
+            for (_, p) in results.iter_mut() {
+                *p /= sum;
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Predict with raw entailment probabilities for multi-label classification
+    pub fn predict_multi_label(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> AnyhowResult<Vec<(String, f32)>> {
+        self.predict_raw(tokenizer, text, candidate_labels)
+    }
+
+    /// Core prediction logic that returns raw entailment probabilities
+    fn predict_raw(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
         candidate_labels: &[&str],
     ) -> AnyhowResult<Vec<(String, f32)>> {
         if candidate_labels.is_empty() {
@@ -879,7 +925,7 @@ impl ZeroShotModernBertModel {
         for &label in candidate_labels {
             let hypothesis = format!("This example is {}.", label);
             let encoding = tokenizer
-                .encode((premise, hypothesis.as_str()), true)
+                .encode((text, hypothesis.as_str()), true)
                 .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
             encodings.push(encoding);
         }
@@ -978,7 +1024,16 @@ impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classificati
         text: &str,
         candidate_labels: &[&str],
     ) -> AnyhowResult<Vec<(String, f32)>> {
-        self.predict(tokenizer, text, candidate_labels)
+        self.predict_single_label(tokenizer, text, candidate_labels)
+    }
+
+    fn predict_multi_label(
+        &self,
+        tokenizer: &Tokenizer,
+        text: &str,
+        candidate_labels: &[&str],
+    ) -> AnyhowResult<Vec<(String, f32)>> {
+        self.predict_raw(tokenizer, text, candidate_labels)
     }
 
     fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
