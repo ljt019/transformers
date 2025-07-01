@@ -471,7 +471,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     }
 
     /// Streaming variant of [`completion_with_tools`].
-    pub fn completion_with_tools_stream<'a>(
+    pub fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
