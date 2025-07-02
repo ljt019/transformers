@@ -464,8 +464,6 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         use async_stream::stream;
         
         let event_stream = stream! {
-            let mut accumulated_events = Vec::new();
-            
             futures::pin_mut!(string_stream);
             while let Some(token) = string_stream.next().await {
                 let events = xml_parser.parse_token(&token);
@@ -1213,14 +1211,25 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         let string_stream = self.message_completion_stream_with_tools(messages)?;
         
         use futures::StreamExt;
-        Ok(string_stream.filter_map(move |token| {
-            let events = xml_parser.parse_token(&token);
-            if events.is_empty() {
-                None
-            } else {
-                Some(futures::stream::iter(events))
+        use async_stream::stream;
+        
+        let event_stream = stream! {
+            futures::pin_mut!(string_stream);
+            while let Some(token) = string_stream.next().await {
+                let events = xml_parser.parse_token(&token);
+                for event in events {
+                    yield event;
+                }
             }
-        }).flatten())
+            
+            // Flush any remaining events
+            let final_events = xml_parser.flush();
+            for event in final_events {
+                yield event;
+            }
+        };
+        
+        Ok(event_stream)
     }
 }
 

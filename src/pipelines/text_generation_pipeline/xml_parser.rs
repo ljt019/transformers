@@ -80,8 +80,8 @@ impl XmlParserBuilder {
 /// Parser state for tracking XML tag parsing
 #[derive(Debug, Clone)]
 struct ParserState {
-    /// Currently open tags and their accumulated content
-    open_tags: HashMap<String, String>,
+    /// Stack of currently open tags (tag name and accumulated content)
+    open_tags: Vec<(String, String)>,
     /// Buffer for content outside any registered tags
     content_buffer: String,
     /// Buffer for partial tag parsing
@@ -93,7 +93,7 @@ struct ParserState {
 impl Default for ParserState {
     fn default() -> Self {
         Self {
-            open_tags: HashMap::new(),
+            open_tags: Vec::new(),
             content_buffer: String::new(),
             tag_buffer: String::new(),
             in_tag: false,
@@ -183,9 +183,8 @@ impl XmlParser {
             _ => {
                 // Regular content character
                 // Check if we're inside any registered tag
-                if let Some((tag_name, _)) = state.open_tags.iter().next() {
-                    let tag_name = tag_name.clone();
-                    state.open_tags.get_mut(&tag_name).unwrap().push(c);
+                if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+                    content.push(c);
                 } else {
                     state.content_buffer.push(c);
                 }
@@ -199,13 +198,23 @@ impl XmlParser {
         if let Some(tag_name) = self.parse_tag_name(tag_content) {
             if self.registered_tags.contains(&tag_name) {
                 if tag_content.starts_with("</") {
-                    // Closing tag
-                    if let Some(content) = state.open_tags.remove(&tag_name) {
+                    // Closing tag - find matching opening tag
+                    if let Some(pos) = state.open_tags.iter().rposition(|(name, _)| name == &tag_name) {
+                        let (_, content) = state.open_tags.remove(pos);
                         return Some(Event::tagged(tag_name, content));
                     }
                 } else if !tag_content.ends_with("/>") {
                     // Opening tag (not self-closing)
-                    state.open_tags.insert(tag_name, String::new());
+                    // First emit any pending content if we're at top level
+                    if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
+                        let content = state.content_buffer.clone();
+                        state.content_buffer.clear();
+                        // We need to push the tag AFTER emitting content
+                        state.open_tags.push((tag_name, String::new()));
+                        return Some(Event::content(content));
+                    }
+                    
+                    state.open_tags.push((tag_name, String::new()));
                 }
             } else {
                 // Tag not registered, treat as content
@@ -213,7 +222,7 @@ impl XmlParser {
                     state.content_buffer.push_str(tag_content);
                 } else {
                     // We're inside a registered tag, add to its content
-                    if let Some((_, content)) = state.open_tags.iter_mut().next() {
+                    if let Some((_, ref mut content)) = state.open_tags.last_mut() {
                         content.push_str(tag_content);
                     }
                 }
@@ -224,20 +233,13 @@ impl XmlParser {
                 state.content_buffer.push_str(tag_content);
             } else {
                 // We're inside a registered tag, add to its content
-                if let Some((_, content)) = state.open_tags.iter_mut().next() {
+                if let Some((_, ref mut content)) = state.open_tags.last_mut() {
                     content.push_str(tag_content);
                 }
             }
         }
 
-        // Check if we should emit content event
-        if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
-            let content = state.content_buffer.clone();
-            state.content_buffer.clear();
-            Some(Event::content(content))
-        } else {
-            None
-        }
+        None
     }
 
     /// Extract tag name from tag content (e.g., "<think>" -> "think", "</think>" -> "think")
@@ -275,7 +277,7 @@ impl XmlParser {
         }
 
         // Emit any unclosed tags as content (malformed XML)
-        for (tag, content) in state.open_tags.drain() {
+        for (tag, content) in state.open_tags.drain(..) {
             if !content.is_empty() {
                 events.push(Event::tagged(tag, content));
             }
