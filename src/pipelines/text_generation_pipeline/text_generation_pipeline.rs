@@ -1,5 +1,4 @@
-mod base_pipeline;
-pub use base_pipeline::BasePipeline;
+use super::base_pipeline::BasePipeline;
 
 use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling};
 use super::text_generation_model::TextGenerationModel;
@@ -534,7 +533,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         Ok(stream! {
             let mut messages = messages;
             
-            for await chunk in self.message_completion_stream_with_tools(&messages)? {
+            for await chunk in self.message_completion_stream_with_tools(&messages[..])? {
                 yield chunk;
             }
         })

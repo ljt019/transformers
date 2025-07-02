@@ -3,7 +3,8 @@ use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
 use crate::pipelines::utils::model_cache::global_cache;
 
 use super::text_generation_model::TextGenerationModel;
-use super::text_generation_pipeline::{TextGenerationPipeline, XmlGenerationPipeline};
+use super::text_generation_pipeline::TextGenerationPipeline;
+use super::xml_generation_pipeline::XmlGenerationPipeline;
 use super::xml_parser::XmlParser;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
