@@ -2,6 +2,7 @@ use super::text_generation_model::LanguageModelContext;
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling};
 use super::xml_parser::{Event, XmlParser};
+use super::{Output, StreamOutput};
 use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };
@@ -20,6 +21,7 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
     device: candle_core::Device,
     last_processed_tokens: Arc<Mutex<Vec<u32>>>,
     special_strings: std::collections::HashSet<String>,
+    xml_parser: Option<XmlParser>,
 }
 
 use async_stream::try_stream;
@@ -94,6 +96,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             device,
             last_processed_tokens: Arc::new(Mutex::new(Vec::new())),
             special_strings,
+            xml_parser: None,
         })
     }
 
@@ -102,15 +105,44 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.context.lock().unwrap().position()
     }
 
+    /// Register an XML parser to parse outputs into structured events
+    pub fn register_xml_parser(&mut self, xml_parser: XmlParser) {
+        self.xml_parser = Some(xml_parser);
+    }
+
+    /// Get a reference to the registered XML parser, if any
+    pub fn xml_parser(&self) -> Option<&XmlParser> {
+        self.xml_parser.as_ref()
+    }
+
     /// Generate a completion from either a prompt or a chat history.
-    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        match input.into() {
-            Input::Prompt(p) => self.prompt_completion(p),
-            Input::Messages(m) => self.message_completion(m),
+    /// Returns Output::Events if an XML parser is registered, Output::Text otherwise.
+    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<Output> {
+        let text = match input.into() {
+            Input::Prompt(p) => self.prompt_completion_internal(p)?,
+            Input::Messages(m) => self.message_completion_internal(m)?,
+        };
+        
+        if let Some(xml_parser) = &self.xml_parser {
+            let events = xml_parser.parse_complete(&text);
+            Ok(Output::Events(events))
+        } else {
+            Ok(Output::Text(text))
         }
     }
 
-    pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<String> {
+    pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<Output> {
+        let text = self.prompt_completion_internal(prompt)?;
+        
+        if let Some(xml_parser) = &self.xml_parser {
+            let events = xml_parser.parse_complete(&text);
+            Ok(Output::Events(events))
+        } else {
+            Ok(Output::Text(text))
+        }
+    }
+
+    fn prompt_completion_internal(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset context for fresh generation
         self.context.lock().unwrap().reset();
 
@@ -130,7 +162,18 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.completion_from_tokens(&prompt_tokens)
     }
 
-    pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+    pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<Output> {
+        let text = self.message_completion_internal(messages)?;
+        
+        if let Some(xml_parser) = &self.xml_parser {
+            let events = xml_parser.parse_complete(&text);
+            Ok(Output::Events(events))
+        } else {
+            Ok(Output::Text(text))
+        }
+    }
+
+    fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
         let templated_prompt = self.model.lock().unwrap().apply_chat_template(messages)?;
 
         let new_tokens = self
@@ -195,6 +238,39 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     pub fn prompt_completion_stream(
         &self,
         prompt: &str,
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
+        let string_stream = self.prompt_completion_stream_internal(prompt)?;
+        
+        if let Some(xml_parser) = &self.xml_parser {
+            xml_parser.reset();
+            
+            use futures::StreamExt;
+            use async_stream::stream;
+            
+            Ok(Box::pin(stream! {
+                futures::pin_mut!(string_stream);
+                while let Some(token) = string_stream.next().await {
+                    let events = xml_parser.parse_token(&token);
+                    for event in events {
+                        yield StreamOutput::Event(event);
+                    }
+                }
+                
+                // Flush any remaining events
+                let final_events = xml_parser.flush();
+                for event in final_events {
+                    yield StreamOutput::Event(event);
+                }
+            }))
+        } else {
+            use futures::StreamExt;
+            Ok(Box::pin(string_stream.map(StreamOutput::Text)))
+        }
+    }
+
+    fn prompt_completion_stream_internal(
+        &self,
+        prompt: &str,
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
         // Fresh turn → reset context
         self.context.lock().unwrap().reset();
@@ -218,18 +294,52 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     }
 
     /// Streaming version of [`completion`].
+    /// Returns StreamOutput::Event if an XML parser is registered, StreamOutput::Text otherwise.
     pub fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + 'a>>> {
         match input.into() {
-            Input::Prompt(p) => Ok(Box::pin(self.prompt_completion_stream(p)?)),
-            Input::Messages(m) => Ok(Box::pin(self.message_completion_stream(m)?)),
+            Input::Prompt(p) => self.prompt_completion_stream(p),
+            Input::Messages(m) => self.message_completion_stream(m),
         }
     }
 
 
     pub fn message_completion_stream(
+        &self,
+        messages: &[crate::Message],
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
+        let string_stream = self.message_completion_stream_internal(messages)?;
+        
+        if let Some(xml_parser) = &self.xml_parser {
+            xml_parser.reset();
+            
+            use futures::StreamExt;
+            use async_stream::stream;
+            
+            Ok(Box::pin(stream! {
+                futures::pin_mut!(string_stream);
+                while let Some(token) = string_stream.next().await {
+                    let events = xml_parser.parse_token(&token);
+                    for event in events {
+                        yield StreamOutput::Event(event);
+                    }
+                }
+                
+                // Flush any remaining events
+                let final_events = xml_parser.flush();
+                for event in final_events {
+                    yield StreamOutput::Event(event);
+                }
+            }))
+        } else {
+            use futures::StreamExt;
+            Ok(Box::pin(string_stream.map(StreamOutput::Text)))
+        }
+    }
+
+    fn message_completion_stream_internal(
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
@@ -439,130 +549,9 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         })
     }
 
-    /// Generate a completion with XML parsing from either a prompt or chat messages.
-    /// Returns parsed events instead of raw text.
-    pub fn completion_with_xml_parser<'a>(
-        &self,
-        input: impl Into<Input<'a>>,
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.completion(input)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
 
-    /// Streaming version of completion with XML parsing.
-    /// Returns a stream of Events instead of raw strings.
-    pub fn completion_stream_with_xml_parser<'a>(
-        &'a self,
-        input: impl Into<Input<'a>>,
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
-        xml_parser.reset(); // Reset parser for new generation
-        let string_stream = self.completion_stream(input)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(Box::pin(event_stream))
-    }
 
-    /// Generate a prompt completion with XML parsing.
-    pub fn prompt_completion_with_xml_parser(
-        &self,
-        prompt: &str,
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.prompt_completion(prompt)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
 
-    /// Streaming version of prompt completion with XML parsing.
-    pub fn prompt_completion_stream_with_xml_parser<'a>(
-        &'a self,
-        prompt: &str,
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
-        xml_parser.reset();
-        let string_stream = self.prompt_completion_stream(prompt)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(event_stream)
-    }
-
-    /// Generate a message completion with XML parsing.
-    pub fn message_completion_with_xml_parser(
-        &self,
-        messages: &[crate::Message],
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.message_completion(messages)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
-
-    /// Streaming version of message completion with XML parsing.
-    pub fn message_completion_stream_with_xml_parser<'a>(
-        &'a self,
-        messages: &'a [crate::Message],
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
-        xml_parser.reset();
-        let string_stream = self.message_completion_stream(messages)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(event_stream)
-    }
 }
 
 impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
@@ -624,9 +613,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Generate assistant response for current state
             let assistant_response = if messages.len() == 1 {
                 // First turn – no previous context to reuse
-                self.prompt_completion(prompt)?
+                self.prompt_completion_internal(prompt)?
             } else {
-                self.message_completion(&messages)?
+                self.message_completion_internal(&messages)?
             };
 
             // Check for tool calls
@@ -778,7 +767,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         for _ in 0..MAX_TOOL_ITERATIONS {
             // Generate assistant response for current state
-            let assistant_response = self.message_completion(&messages)?;
+            let assistant_response = self.message_completion_internal(&messages)?;
 
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
@@ -1109,128 +1098,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         Ok(calls)
     }
 
-    /// Generate a completion with tools and XML parsing.
-    pub fn completion_with_tools_and_xml_parser<'a>(
-        &self,
-        input: impl Into<Input<'a>>,
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.completion_with_tools(input)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
 
-    /// Streaming version of completion with tools and XML parsing.
-    pub fn completion_stream_with_tools_and_xml_parser<'a>(
-        &'a self,
-        input: impl Into<Input<'a>>,
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
-        xml_parser.reset();
-        let string_stream = self.completion_stream_with_tools(input)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(Box::pin(event_stream))
-    }
-
-    /// Generate a prompt completion with tools and XML parsing.
-    pub fn prompt_completion_with_tools_and_xml_parser(
-        &self,
-        prompt: &str,
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.prompt_completion_with_tools(prompt)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
-
-    /// Streaming version of prompt completion with tools and XML parsing.
-    pub fn prompt_completion_stream_with_tools_and_xml_parser<'a>(
-        &'a self,
-        prompt: &str,
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
-        xml_parser.reset();
-        let string_stream = self.prompt_completion_stream_with_tools(prompt)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(event_stream)
-    }
-
-    /// Generate a message completion with tools and XML parsing.
-    pub fn message_completion_with_tools_and_xml_parser(
-        &self,
-        messages: &[crate::Message],
-        xml_parser: &XmlParser,
-    ) -> anyhow::Result<Vec<Event>> {
-        let raw_text = self.message_completion_with_tools(messages)?;
-        Ok(xml_parser.parse_complete(&raw_text))
-    }
-
-    /// Streaming version of message completion with tools and XML parsing.
-    pub fn message_completion_stream_with_tools_and_xml_parser<'a>(
-        &'a self,
-        messages: &'a [crate::Message],
-        xml_parser: &'a XmlParser,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
-        xml_parser.reset();
-        let string_stream = self.message_completion_stream_with_tools(messages)?;
-        
-        use futures::StreamExt;
-        use async_stream::stream;
-        
-        let event_stream = stream! {
-            futures::pin_mut!(string_stream);
-            while let Some(token) = string_stream.next().await {
-                let events = xml_parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-            
-            // Flush any remaining events
-            let final_events = xml_parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        };
-        
-        Ok(event_stream)
-    }
 }
 
 #[derive(Deserialize)]

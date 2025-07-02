@@ -35,6 +35,70 @@ pub use std::io::Write;
 pub use tool_error::ToolError;
 pub use xml_parser::{Event, XmlParser, XmlParserBuilder};
 
+/// Output from text generation that can be either raw strings or parsed XML events
+#[derive(Debug, Clone, PartialEq)]
+pub enum Output {
+    /// Raw text output (when no XML parser is registered)
+    Text(String),
+    /// Parsed XML events (when an XML parser is registered)
+    Events(Vec<Event>),
+}
+
+impl Output {
+    /// Get the raw text content, regardless of output type
+    pub fn as_text(&self) -> String {
+        match self {
+            Output::Text(text) => text.clone(),
+            Output::Events(events) => {
+                events.iter()
+                    .map(|e| e.get_content())
+                    .collect::<Vec<_>>()
+                    .join("")
+            }
+        }
+    }
+    
+    /// Get events if this is an Events output, None otherwise
+    pub fn as_events(&self) -> Option<&Vec<Event>> {
+        match self {
+            Output::Events(events) => Some(events),
+            Output::Text(_) => None,
+        }
+    }
+    
+    /// Check if this output contains events
+    pub fn has_events(&self) -> bool {
+        matches!(self, Output::Events(_))
+    }
+}
+
+/// Streaming output that can be either strings or events
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamOutput {
+    /// Raw text chunk (when no XML parser is registered)
+    Text(String),
+    /// A single XML event (when an XML parser is registered)
+    Event(Event),
+}
+
+impl StreamOutput {
+    /// Get the text content of this output
+    pub fn as_text(&self) -> &str {
+        match self {
+            StreamOutput::Text(text) => text,
+            StreamOutput::Event(event) => event.get_content(),
+        }
+    }
+    
+    /// Get the event if this is an Event output
+    pub fn as_event(&self) -> Option<&Event> {
+        match self {
+            StreamOutput::Event(event) => Some(event),
+            StreamOutput::Text(_) => None,
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! tools {
     ($($tool:ident),+ $(,)?) => {
