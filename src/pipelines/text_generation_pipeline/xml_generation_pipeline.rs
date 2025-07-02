@@ -1,10 +1,9 @@
-mod base_pipeline;
-pub use base_pipeline::BasePipeline;
-
+use super::base_pipeline::BasePipeline;
 use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling};
 use super::text_generation_model::TextGenerationModel;
-use crate::models::generation::{initialize_logits_processor, apply_repeat_penalty, GenerationParams};
+use super::text_generation_pipeline::Input;
 use super::xml_parser::{Event, XmlParser};
+use crate::models::generation::{initialize_logits_processor, apply_repeat_penalty, GenerationParams};
 use candle_core::Tensor;
 use std::sync::{Arc, Mutex};
 use async_stream::try_stream;
@@ -13,47 +12,17 @@ use std::pin::Pin;
 use regex::Regex;
 use serde::Deserialize;
 
-// Helper to convert `anyhow::Result<String>` into `String` (panicking on error).
-fn unwrap_res(r: anyhow::Result<String>) -> String {
-    r.expect("stream generation failed")
-}
-
-/// Input for a text-generation request.
-#[derive(Debug, Clone)]
-pub enum Input<'a> {
-    /// A raw prompt string.
-    Prompt(&'a str),
-    /// A sequence of chat messages.
-    Messages(&'a [crate::Message]),
-}
-
-impl<'a> From<&'a str> for Input<'a> {
-    fn from(s: &'a str) -> Self {
-        Self::Prompt(s)
-    }
-}
-
-impl<'a> From<&'a [crate::Message]> for Input<'a> {
-    fn from(m: &'a [crate::Message]) -> Self {
-        Self::Messages(m)
-    }
-}
-
-impl<'a> From<&'a Vec<crate::Message>> for Input<'a> {
-    fn from(v: &'a Vec<crate::Message>) -> Self {
-        Self::Messages(v.as_slice())
-    }
-}
-
-/// Text generation pipeline that outputs strings
-pub struct TextGenerationPipeline<M: TextGenerationModel> {
+/// XML generation pipeline that outputs parsed Events
+pub struct XmlGenerationPipeline<M: TextGenerationModel> {
     base: BasePipeline<M>,
+    xml_parser: XmlParser,
 }
 
-impl<M: TextGenerationModel> TextGenerationPipeline<M> {
-    pub fn new(model: M, gen_params: GenerationParams) -> anyhow::Result<Self> {
+impl<M: TextGenerationModel> XmlGenerationPipeline<M> {
+    pub fn new(model: M, gen_params: GenerationParams, xml_parser: XmlParser) -> anyhow::Result<Self> {
         Ok(Self {
             base: BasePipeline::new(model, gen_params)?,
+            xml_parser,
         })
     }
 
@@ -62,13 +31,20 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.base.context_position()
     }
 
+    /// Get a reference to the XML parser
+    pub fn xml_parser(&self) -> &XmlParser {
+        &self.xml_parser
+    }
+
     /// Generate a completion from either a prompt or a chat history.
-    /// Returns a String.
-    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        match input.into() {
-            Input::Prompt(p) => self.prompt_completion_internal(p),
-            Input::Messages(m) => self.message_completion_internal(m),
-        }
+    /// Returns a Vec<Event>.
+    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<Vec<Event>> {
+        let text = match input.into() {
+            Input::Prompt(p) => self.prompt_completion_internal(p)?,
+            Input::Messages(m) => self.message_completion_internal(m)?,
+        };
+
+        Ok(self.xml_parser.parse_complete(&text))
     }
 
     fn prompt_completion_internal(&self, prompt: &str) -> anyhow::Result<String> {
@@ -132,11 +108,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         Ok(response)
     }
 
-    /// Streaming version of completion
+    /// Streaming version of completion that yields Events
     pub fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
         match input.into() {
             Input::Prompt(p) => self.prompt_completion_stream(p),
             Input::Messages(m) => self.message_completion_stream(m),
@@ -146,7 +122,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     fn prompt_completion_stream(
         &self,
         prompt: &str,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + '_>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + '_>>> {
         // Fresh turn → reset context
         self.base.context.lock().unwrap().reset();
 
@@ -162,17 +138,35 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .get_ids()
             .to_vec();
 
-        // Convert the internal Result stream into a user-friendly stream.
         use futures::StreamExt;
         let inner = self.raw_completion_stream(tokens);
 
-        Ok(Box::pin(inner.map(unwrap_res)))
+        self.xml_parser.reset();
+        let parser = self.xml_parser.clone();
+
+        use async_stream::stream;
+        Ok(Box::pin(stream! {
+            futures::pin_mut!(inner);
+            while let Some(result) = inner.next().await {
+                let token = result.expect("stream generation failed");
+                let events = parser.parse_token(&token);
+                for event in events {
+                    yield event;
+                }
+            }
+
+            // Flush any remaining events
+            let final_events = parser.flush();
+            for event in final_events {
+                yield event;
+            }
+        }))
     }
 
     fn message_completion_stream(
         &self,
         messages: &[crate::Message],
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + '_>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + '_>>> {
         let templated = self.base.model.lock().unwrap().apply_chat_template(messages)?;
         let new_tokens = self
             .base.model_tokenizer
@@ -189,17 +183,57 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         } else if self.base.can_reuse_cache(&new_tokens) {
             let suffix = new_tokens[self.base.last_processed_tokens.lock().unwrap().len()..].to_vec();
             *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+            
             let inner = self.raw_completion_stream(suffix);
+            self.xml_parser.reset();
+            let parser = self.xml_parser.clone();
+
+            use async_stream::stream;
             use futures::StreamExt;
-            return Ok(Box::pin(inner.map(unwrap_res)));
+            return Ok(Box::pin(stream! {
+                futures::pin_mut!(inner);
+                while let Some(result) = inner.next().await {
+                    let token = result.expect("stream generation failed");
+                    let events = parser.parse_token(&token);
+                    for event in events {
+                        yield event;
+                    }
+                }
+
+                // Flush any remaining events
+                let final_events = parser.flush();
+                for event in final_events {
+                    yield event;
+                }
+            }));
         } else {
             self.base.context.lock().unwrap().reset();
         }
 
         *self.base.last_processed_tokens.lock().unwrap() = new_tokens.clone();
-        use futures::StreamExt;
         let inner = self.raw_completion_stream(new_tokens);
-        Ok(Box::pin(inner.map(unwrap_res)))
+        
+        self.xml_parser.reset();
+        let parser = self.xml_parser.clone();
+
+        use async_stream::stream;
+        use futures::StreamExt;
+        Ok(Box::pin(stream! {
+            futures::pin_mut!(inner);
+            while let Some(result) = inner.next().await {
+                let token = result.expect("stream generation failed");
+                let events = parser.parse_token(&token);
+                for event in events {
+                    yield event;
+                }
+            }
+
+            // Flush any remaining events
+            let final_events = parser.flush();
+            for event in final_events {
+                yield event;
+            }
+        }))
     }
 
     fn raw_completion_stream<'a>(&'a self, input_tokens: Vec<u32>) -> Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>
@@ -294,14 +328,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 }
 
 // Implementations for models with ToggleableReasoning
-impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
+impl<M: TextGenerationModel + ToggleableReasoning> XmlGenerationPipeline<M> {
     pub fn set_reasoning(&self, enable: bool) -> anyhow::Result<()> {
         self.base.model.lock().unwrap().set_reasoning(enable)
     }
 }
 
 // Implementations for models with ToolCalling
-impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
+impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     pub fn register_tool<T: IntoTool>(&self, tool: T) -> anyhow::Result<()> {
         let tool = tool.into_tool();
         self.base.model.lock().unwrap().register_tool(tool)
@@ -318,17 +352,19 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         self.base.model.lock().unwrap().get_tools()
     }
 
-    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        match input.into() {
-            Input::Prompt(p) => self.prompt_completion_with_tools(p),
-            Input::Messages(m) => self.message_completion_with_tools(m),
-        }
+    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<Vec<Event>> {
+        let text = match input.into() {
+            Input::Prompt(p) => self.prompt_completion_with_tools(p)?,
+            Input::Messages(m) => self.message_completion_with_tools(m)?,
+        };
+
+        Ok(self.xml_parser.parse_complete(&text))
     }
 
     pub fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
         match input.into() {
             Input::Prompt(p) => {
                 let stream = self.prompt_completion_stream_with_tools(p)?;
@@ -341,7 +377,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
     }
 
-    pub fn prompt_completion_with_tools(&self, prompt: &str) -> anyhow::Result<String> {
+    fn prompt_completion_with_tools(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset for new generation
         self.base.context.lock().unwrap().reset();
 
@@ -355,7 +391,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         loop {
             // Generate response
-            let mut last_role = messages.last().map(|m| &m.role).cloned();
             let templated = self.base.model.lock().unwrap().apply_chat_template(&messages)?;
             let tokens = self
                 .base.model_tokenizer
@@ -412,7 +447,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
     }
 
-    pub fn message_completion_with_tools(
+    fn message_completion_with_tools(
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<String> {
@@ -523,10 +558,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
     }
 
-    pub fn prompt_completion_stream_with_tools(
+    fn prompt_completion_stream_with_tools(
         &self,
         prompt: &str,
-    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+    ) -> anyhow::Result<impl Stream<Item = Event> + Send + '_> {
         use async_stream::stream;
         use futures::StreamExt;
 
@@ -534,16 +569,16 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         Ok(stream! {
             let mut messages = messages;
             
-            for await chunk in self.message_completion_stream_with_tools(&messages)? {
-                yield chunk;
+            for await event in self.message_completion_stream_with_tools(&messages)? {
+                yield event;
             }
         })
     }
 
-    pub fn message_completion_stream_with_tools(
+    fn message_completion_stream_with_tools(
         &self,
         messages: &[crate::Message],
-    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+    ) -> anyhow::Result<impl Stream<Item = Event> + Send + '_> {
         use async_stream::stream;
         use futures::StreamExt;
 
@@ -553,6 +588,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
 
         let initial_messages = messages.to_vec();
+        let parser = self.xml_parser.clone();
         
         Ok(stream! {
             let mut messages = initial_messages;
@@ -563,9 +599,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 let stream = self.completion_stream(&messages[..])?;
                 futures::pin_mut!(stream);
 
-                while let Some(chunk) = stream.next().await {
-                    response_buffer.push_str(&chunk);
-                    yield chunk;
+                // Collect full response while yielding events
+                while let Some(event) = stream.next().await {
+                    response_buffer.push_str(event.get_content());
+                    yield event;
                 }
 
                 // Check for tool calls in the complete response

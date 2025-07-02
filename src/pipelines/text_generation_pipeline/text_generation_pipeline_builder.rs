@@ -3,7 +3,8 @@ use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
 use crate::pipelines::utils::model_cache::global_cache;
 
 use super::text_generation_model::TextGenerationModel;
-use super::text_generation_pipeline::TextGenerationPipeline;
+use super::text_generation_pipeline::{TextGenerationPipeline, XmlGenerationPipeline};
+use super::xml_parser::XmlParser;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -15,6 +16,7 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     top_p: Option<f64>,
     top_k: Option<usize>,
     min_p: Option<f64>,
+    xml_parser: Option<XmlParser>,
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
@@ -29,6 +31,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             top_p: None,
             top_k: None,
             min_p: None,
+            xml_parser: None,
         }
     }
 
@@ -72,11 +75,20 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
+    pub fn with_xml_parser(mut self, xml_parser: XmlParser) -> Self {
+        self.xml_parser = Some(xml_parser);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: std::fmt::Display,
     {
+        if self.xml_parser.is_some() {
+            anyhow::bail!("Cannot build a TextGenerationPipeline with an XML parser registered. Use build_xml() instead.");
+        }
+
         // Always use the global cache to share models
         let cache_key = format!("{}", self.model_options);
         let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
@@ -96,7 +108,37 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.min_p.unwrap_or(default_params.min_p),
         );
 
-        Ok(TextGenerationPipeline::new(model, gen_params)?)
+        TextGenerationPipeline::new(model, gen_params)
+    }
+
+    pub fn build_xml(self) -> anyhow::Result<XmlGenerationPipeline<M>>
+    where
+        M: Clone + Send + Sync + 'static,
+        M::Options: std::fmt::Display,
+    {
+        let xml_parser = self.xml_parser
+            .ok_or_else(|| anyhow::anyhow!("Cannot build an XmlGenerationPipeline without an XML parser. Use with_xml_parser() first."))?;
+
+        // Always use the global cache to share models
+        let cache_key = format!("{}", self.model_options);
+        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
+
+        // Start with model-specific defaults
+        let default_params = model.default_generation_params();
+
+        // Override with any user-specified values
+        let gen_params = crate::models::generation::GenerationParams::new(
+            self.temperature.unwrap_or(default_params.temperature),
+            self.repeat_penalty.unwrap_or(default_params.repeat_penalty),
+            self.repeat_last_n.unwrap_or(default_params.repeat_last_n),
+            self.seed.unwrap_or_else(|| rand::random::<u64>()),
+            self.max_len.unwrap_or(default_params.max_len),
+            self.top_p.unwrap_or(default_params.top_p),
+            self.top_k.unwrap_or(default_params.top_k),
+            self.min_p.unwrap_or(default_params.min_p),
+        );
+
+        XmlGenerationPipeline::new(model, gen_params, xml_parser)
     }
 }
 
