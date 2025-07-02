@@ -13,7 +13,7 @@ impl Tag {
     pub fn name(&self) -> &str {
         &self.name
     }
-    
+
     /// Get the unique ID of this tag
     pub fn id(&self) -> usize {
         self.id
@@ -130,12 +130,12 @@ impl XmlParserBuilder {
     pub fn build(self) -> XmlParser {
         let mut tag_map = HashMap::new();
         let mut tags_set = HashSet::new();
-        
+
         for (id, name) in self.tags.into_iter().enumerate() {
             tags_set.insert(name.clone());
             tag_map.insert(name.clone(), Tag { name, id });
         }
-        
+
         XmlParser::new(tags_set, tag_map)
     }
 }
@@ -151,6 +151,12 @@ struct ParserState {
     tag_buffer: String,
     /// Whether we're currently inside a tag
     in_tag: bool,
+    /// Length of top-level content that has already been emitted downstream. This lets us
+    /// stream only the newly arrived slice on every call to `parse_token`.
+    emitted_top_len: usize,
+    /// For each open tag name we keep the number of characters that have already been
+    /// emitted so we can stream incremental updates without duplication.
+    emitted_tag_lens: std::collections::HashMap<String, usize>,
 }
 
 impl Default for ParserState {
@@ -160,6 +166,8 @@ impl Default for ParserState {
             content_buffer: String::new(),
             tag_buffer: String::new(),
             in_tag: false,
+            emitted_top_len: 0,
+            emitted_tag_lens: std::collections::HashMap::new(),
         }
     }
 }
@@ -194,13 +202,13 @@ impl XmlParser {
     pub fn parse_complete(&self, text: &str) -> Vec<Event> {
         self.reset();
         let mut events = Vec::new();
-        
+
         for char in text.chars() {
             if let Some(event) = self.process_char(char) {
                 events.push(event);
             }
         }
-        
+
         // Flush any remaining content
         events.extend(self.flush());
         events
@@ -209,20 +217,53 @@ impl XmlParser {
     /// Parse a streaming token and return any events that are ready
     pub fn parse_token(&self, token: &str) -> Vec<Event> {
         let mut events = Vec::new();
-        
+
         for char in token.chars() {
             if let Some(event) = self.process_char(char) {
                 events.push(event);
             }
         }
-        
+
+        // Emit the newly appended slice either for top-level content or for the currently
+        // innermost open tag (if any). This enables true streaming behaviour: callers get
+        // incremental updates instead of the whole block at close time.
+        {
+            let mut state = self.state.lock().unwrap();
+
+            if state.open_tags.is_empty() {
+                // Outside of any registered tag.
+                let current_len = state.content_buffer.len();
+                if current_len > state.emitted_top_len {
+                    let new_slice = state.content_buffer[state.emitted_top_len..].to_string();
+                    events.push(Event::content(new_slice));
+                    state.emitted_top_len = current_len;
+                }
+            } else {
+                // Inside the innermost registered tag → stream its delta.
+                if let Some((tag_name_ref, content_ref)) = state.open_tags.last() {
+                    let tag_name = tag_name_ref.clone();
+                    let total_len = content_ref.len();
+
+                    let already_emitted = *state.emitted_tag_lens.get(&tag_name).unwrap_or(&0);
+
+                    if total_len > already_emitted {
+                        let new_slice = content_ref[already_emitted..].to_string();
+                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                            events.push(Event::tagged_internal(tag_handle.clone(), new_slice));
+                        }
+                        state.emitted_tag_lens.insert(tag_name, total_len);
+                    }
+                }
+            }
+        }
+
         events
     }
 
     /// Process a single character and return an event if one is ready
     fn process_char(&self, c: char) -> Option<Event> {
         let mut state = self.state.lock().unwrap();
-        
+
         match c {
             '<' => {
                 // Start of a potential tag
@@ -235,10 +276,10 @@ impl XmlParser {
                 // End of tag
                 state.tag_buffer.push(c);
                 state.in_tag = false;
-                
+
                 let tag_content = state.tag_buffer.clone();
                 state.tag_buffer.clear();
-                
+
                 self.handle_tag(&mut state, &tag_content)
             }
             _ if state.in_tag => {
@@ -265,25 +306,36 @@ impl XmlParser {
             if self.registered_tags.contains(&tag_name) {
                 if tag_content.starts_with("</") {
                     // Closing tag - find matching opening tag
-                    if let Some(pos) = state.open_tags.iter().rposition(|(name, _)| name == &tag_name) {
+                    if let Some(pos) = state
+                        .open_tags
+                        .iter()
+                        .rposition(|(name, _)| name == &tag_name)
+                    {
                         let (_, content) = state.open_tags.remove(pos);
-                        
-                        // Get the Tag handle from our map
-                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                            return Some(Event::tagged_internal(tag_handle.clone(), content));
+
+                        // Determine any remaining (not yet emitted) text for this tag.
+                        let already_emitted = state.emitted_tag_lens.remove(&tag_name).unwrap_or(0);
+
+                        if content.len() > already_emitted {
+                            if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                                return Some(Event::tagged_internal(
+                                    tag_handle.clone(),
+                                    content[already_emitted..].to_string(),
+                                ));
+                            }
                         }
                     }
                 } else if !tag_content.ends_with("/>") {
                     // Opening tag (not self-closing)
                     // First emit any pending content if we're at top level
                     if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
-                        let content = state.content_buffer.clone();
-                        state.content_buffer.clear();
+                        let content = state.content_buffer[state.emitted_top_len..].to_string();
+                        state.emitted_top_len = state.content_buffer.len();
                         // We need to push the tag AFTER emitting content
-                        state.open_tags.push((tag_name, String::new()));
+                        state.open_tags.push((tag_name.clone(), String::new()));
                         return Some(Event::content(content));
                     }
-                    
+
                     state.open_tags.push((tag_name, String::new()));
                 }
             } else {
@@ -319,7 +371,7 @@ impl XmlParser {
         }
 
         let inner = &tag_content[1..tag_content.len() - 1];
-        
+
         if inner.starts_with('/') {
             // Closing tag
             let name = &inner[1..];
@@ -341,16 +393,26 @@ impl XmlParser {
         let mut events = Vec::new();
 
         // Emit any remaining content
-        if !state.content_buffer.is_empty() {
-            events.push(Event::content(state.content_buffer.clone()));
-            state.content_buffer.clear();
+        if state.content_buffer.len() > state.emitted_top_len {
+            events.push(Event::content(
+                state.content_buffer[state.emitted_top_len..].to_string(),
+            ));
         }
+        state.content_buffer.clear();
+        state.emitted_top_len = 0;
 
-        // Emit any unclosed tags as content (malformed XML)
-        for (tag_name, content) in state.open_tags.drain(..) {
-            if !content.is_empty() {
+        // Emit any unclosed tags as content (malformed XML). We must take ownership of the
+        // drained tags first to avoid double-borrowing `state`.
+        let drained: Vec<_> = state.open_tags.drain(..).collect();
+        for (tag_name, content) in drained {
+            let already_emitted = state.emitted_tag_lens.remove(&tag_name).unwrap_or(0);
+
+            if content.len() > already_emitted {
                 if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                    events.push(Event::tagged_internal(tag_handle.clone(), content));
+                    events.push(Event::tagged_internal(
+                        tag_handle.clone(),
+                        content[already_emitted..].to_string(),
+                    ));
                 }
             }
         }
