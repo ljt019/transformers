@@ -238,39 +238,6 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     pub fn prompt_completion_stream(
         &self,
         prompt: &str,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
-        let string_stream = self.prompt_completion_stream_internal(prompt)?;
-        
-        if let Some(xml_parser) = &self.xml_parser {
-            xml_parser.reset();
-            
-            use futures::StreamExt;
-            use async_stream::stream;
-            
-            Ok(Box::pin(stream! {
-                futures::pin_mut!(string_stream);
-                while let Some(token) = string_stream.next().await {
-                    let events = xml_parser.parse_token(&token);
-                    for event in events {
-                        yield StreamOutput::Event(event);
-                    }
-                }
-                
-                // Flush any remaining events
-                let final_events = xml_parser.flush();
-                for event in final_events {
-                    yield StreamOutput::Event(event);
-                }
-            }))
-        } else {
-            use futures::StreamExt;
-            Ok(Box::pin(string_stream.map(StreamOutput::Text)))
-        }
-    }
-
-    fn prompt_completion_stream_internal(
-        &self,
-        prompt: &str,
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
         // Fresh turn → reset context
         self.context.lock().unwrap().reset();
@@ -294,52 +261,18 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     }
 
     /// Streaming version of [`completion`].
-    /// Returns StreamOutput::Event if an XML parser is registered, StreamOutput::Text otherwise.
     pub fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + 'a>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
         match input.into() {
-            Input::Prompt(p) => self.prompt_completion_stream(p),
-            Input::Messages(m) => self.message_completion_stream(m),
+            Input::Prompt(p) => Ok(Box::pin(self.prompt_completion_stream(p)?)),
+            Input::Messages(m) => Ok(Box::pin(self.message_completion_stream(m)?)),
         }
     }
 
 
     pub fn message_completion_stream(
-        &self,
-        messages: &[crate::Message],
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
-        let string_stream = self.message_completion_stream_internal(messages)?;
-        
-        if let Some(xml_parser) = &self.xml_parser {
-            xml_parser.reset();
-            
-            use futures::StreamExt;
-            use async_stream::stream;
-            
-            Ok(Box::pin(stream! {
-                futures::pin_mut!(string_stream);
-                while let Some(token) = string_stream.next().await {
-                    let events = xml_parser.parse_token(&token);
-                    for event in events {
-                        yield StreamOutput::Event(event);
-                    }
-                }
-                
-                // Flush any remaining events
-                let final_events = xml_parser.flush();
-                for event in final_events {
-                    yield StreamOutput::Event(event);
-                }
-            }))
-        } else {
-            use futures::StreamExt;
-            Ok(Box::pin(string_stream.map(StreamOutput::Text)))
-        }
-    }
-
-    fn message_completion_stream_internal(
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
