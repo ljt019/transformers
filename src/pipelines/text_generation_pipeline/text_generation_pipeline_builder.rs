@@ -4,6 +4,8 @@ use crate::pipelines::utils::model_cache::global_cache;
 
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_pipeline::TextGenerationPipeline;
+use super::xml_generation_pipeline::XmlGenerationPipeline;
+use super::xml_parser::XmlParser;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -96,7 +98,34 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.min_p.unwrap_or(default_params.min_p),
         );
 
-        Ok(TextGenerationPipeline::new(model, gen_params)?)
+        TextGenerationPipeline::new(model, gen_params)
+    }
+
+    pub fn build_xml(self, xml_parser: XmlParser) -> anyhow::Result<XmlGenerationPipeline<M>>
+    where
+        M: Clone + Send + Sync + 'static,
+        M::Options: std::fmt::Display,
+    {
+        // Always use the global cache to share models
+        let cache_key = format!("{}", self.model_options);
+        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
+
+        // Start with model-specific defaults
+        let default_params = model.default_generation_params();
+
+        // Override with any user-specified values
+        let gen_params = crate::models::generation::GenerationParams::new(
+            self.temperature.unwrap_or(default_params.temperature),
+            self.repeat_penalty.unwrap_or(default_params.repeat_penalty),
+            self.repeat_last_n.unwrap_or(default_params.repeat_last_n),
+            self.seed.unwrap_or_else(|| rand::random::<u64>()),
+            self.max_len.unwrap_or(default_params.max_len),
+            self.top_p.unwrap_or(default_params.top_p),
+            self.top_k.unwrap_or(default_params.top_k),
+            self.min_p.unwrap_or(default_params.min_p),
+        );
+
+        XmlGenerationPipeline::new(model, gen_params, xml_parser)
     }
 }
 

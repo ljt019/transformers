@@ -2,16 +2,30 @@ use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::*;
 
 fn main() -> Result<()> {
+    // Create an XML parser with tags to watch for
+    let mut xml_parser_builder = XmlParserBuilder::new();
+    let think_tag = xml_parser_builder.register_tag("think");
+    let xml_parser = xml_parser_builder.build();
+
+    // Build a pipeline with XML parsing capabilities
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
-        .build()?;
+        .build_xml(xml_parser)?;
 
-    let xml_parser = XmlParserBuilder::new().register_tag("think").build();
+    // Generate completion - this will return Vec<Event>
+    let events = pipeline.completion("Solve this math problem step by step: What is 15% of 80?")?;
 
-    let completion = pipeline.
-
-    println!("\n--- Generated Text ---");
-    println!("{}", completion);
+    println!("\n--- Generated Events ---");
+    for event in events {
+        match event.tag() {
+            Some(tag) if tag == &think_tag => {
+                println!("[THINKING] {}", event.get_content());
+            }
+            _ => {
+                println!("[OUTPUT] {}", event.get_content());
+            }
+        }
+    }
 
     Ok(())
 }
