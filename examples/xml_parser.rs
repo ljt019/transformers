@@ -13,9 +13,7 @@ fn main() -> Result<()> {
         .build_xml(xml_parser)?;
 
     // Generate completion - this will return Vec<Event>
-    let events = pipeline.completion(
-        "Solve this math problem step by step: What is 15% of 80?"
-    )?;
+    let events = pipeline.completion("Solve this math problem step by step: What is 15% of 80?")?;
 
     println!("\n--- Generated Events ---");
     for event in events {

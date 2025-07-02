@@ -1,16 +1,20 @@
 use super::base_pipeline::BasePipeline;
 
-use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling, LanguageModelContext};
 use super::text_generation_model::TextGenerationModel;
-use crate::models::generation::{initialize_logits_processor, apply_repeat_penalty, GenerationParams};
+use super::text_generation_model::{
+    IntoTool, LanguageModelContext, ToggleableReasoning, Tool, ToolCalling,
+};
 use super::xml_parser::{Event, XmlParser};
-use candle_core::Tensor;
-use std::sync::{Arc, Mutex};
+use crate::models::generation::{
+    apply_repeat_penalty, initialize_logits_processor, GenerationParams,
+};
 use async_stream::try_stream;
+use candle_core::Tensor;
 use futures::Stream;
-use std::pin::Pin;
 use regex::Regex;
 use serde::Deserialize;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 // Helper to convert `anyhow::Result<String>` into `String` (panicking on error).
 fn unwrap_res(r: anyhow::Result<String>) -> String {
@@ -75,13 +79,15 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.base.context.lock().unwrap().reset();
 
         let templated_prompt = self
-            .base.model
+            .base
+            .model
             .lock()
             .unwrap()
             .apply_chat_template(&[crate::Message::user(prompt)])?;
 
         let prompt_tokens = self
-            .base.model_tokenizer
+            .base
+            .model_tokenizer
             .encode(templated_prompt, true)
             .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
@@ -91,10 +97,16 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     }
 
     fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
-        let templated_prompt = self.base.model.lock().unwrap().apply_chat_template(messages)?;
+        let templated_prompt = self
+            .base
+            .model
+            .lock()
+            .unwrap()
+            .apply_chat_template(messages)?;
 
         let new_tokens = self
-            .base.model_tokenizer
+            .base
+            .model_tokenizer
             .encode(templated_prompt, true)
             .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
@@ -150,12 +162,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.base.context.lock().unwrap().reset();
 
         let templated = self
-            .base.model
+            .base
+            .model
             .lock()
             .unwrap()
             .apply_chat_template(&[crate::Message::user(prompt)])?;
         let tokens = self
-            .base.model_tokenizer
+            .base
+            .model_tokenizer
             .encode(templated, true)
             .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
@@ -172,9 +186,15 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + '_>>> {
-        let templated = self.base.model.lock().unwrap().apply_chat_template(messages)?;
+        let templated = self
+            .base
+            .model
+            .lock()
+            .unwrap()
+            .apply_chat_template(messages)?;
         let new_tokens = self
-            .base.model_tokenizer
+            .base
+            .model_tokenizer
             .encode(templated, true)
             .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
@@ -186,7 +206,8 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             self.base.context.lock().unwrap().reset();
             self.base.last_processed_tokens.lock().unwrap().clear();
         } else if self.base.can_reuse_cache(&new_tokens) {
-            let suffix = new_tokens[self.base.last_processed_tokens.lock().unwrap().len()..].to_vec();
+            let suffix =
+                new_tokens[self.base.last_processed_tokens.lock().unwrap().len()..].to_vec();
             *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
             let inner = self.raw_completion_stream(suffix);
             use futures::StreamExt;
@@ -201,7 +222,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         Ok(Box::pin(inner.map(unwrap_res)))
     }
 
-    fn raw_completion_stream<'a>(&'a self, input_tokens: Vec<u32>) -> Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>
+    fn raw_completion_stream<'a>(
+        &'a self,
+        input_tokens: Vec<u32>,
+    ) -> Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>
     where
         M: 'a,
     {
@@ -354,9 +378,15 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         loop {
             // Generate response
-            let templated = self.base.model.lock().unwrap().apply_chat_template(&messages)?;
+            let templated = self
+                .base
+                .model
+                .lock()
+                .unwrap()
+                .apply_chat_template(&messages)?;
             let tokens = self
-                .base.model_tokenizer
+                .base
+                .model_tokenizer
                 .encode(templated, true)
                 .map_err(|e| anyhow::anyhow!(e))?
                 .get_ids()
@@ -380,7 +410,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
                         // Execute the tool
-                        match tool.execute(call.arguments) {
+                        match tool.call(call.arguments) {
                             Ok(result) => {
                                 tool_responses.push(format!(
                                     "<tool_response>\n{}: {}\n</tool_response>",
@@ -422,10 +452,16 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         let mut messages = messages.to_vec();
 
         loop {
-            // Generate response  
-            let templated = self.base.model.lock().unwrap().apply_chat_template(&messages)?;
+            // Generate response
+            let templated = self
+                .base
+                .model
+                .lock()
+                .unwrap()
+                .apply_chat_template(&messages)?;
             let new_tokens = self
-                .base.model_tokenizer
+                .base
+                .model_tokenizer
                 .encode(templated, true)
                 .map_err(|e| anyhow::anyhow!(e))?
                 .get_ids()
@@ -457,7 +493,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                 .find(|t| t.name == call.name)
                                 .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-                            match tool.execute(call.arguments) {
+                            match tool.call(call.arguments) {
                                 Ok(result) => {
                                     tool_responses.push(format!(
                                         "<tool_response>\n{}: {}\n</tool_response>",
@@ -497,7 +533,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                             .find(|t| t.name == call.name)
                             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-                        match tool.execute(call.arguments) {
+                        match tool.call(call.arguments) {
                             Ok(result) => {
                                 tool_responses.push(format!(
                                     "<tool_response>\n{}: {}\n</tool_response>",
@@ -531,8 +567,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         let messages = vec![crate::Message::user(prompt)];
         Ok(stream! {
             let mut messages = messages;
-            
-            let stream = self.message_completion_stream_with_tools(&messages[..])?;
+
+            let stream = self
+                .message_completion_stream_with_tools(&messages[..])
+                .expect("failed to create inner stream");
             futures::pin_mut!(stream);
             while let Some(chunk) = stream.next().await {
                 yield chunk;
@@ -553,19 +591,23 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
 
         let initial_messages = messages.to_vec();
-        
+
         Ok(stream! {
             let mut messages = initial_messages;
             let mut response_buffer = String::new();
 
             loop {
                 // Stream the response
-                let stream = self.completion_stream(&messages[..])?;
-                futures::pin_mut!(stream);
+                {
+                    let stream_inner = self
+                        .completion_stream(&messages[..])
+                        .expect("failed to create completion stream");
+                    futures::pin_mut!(stream_inner);
 
-                while let Some(chunk) = stream.next().await {
-                    response_buffer.push_str(&chunk);
-                    yield chunk;
+                    while let Some(chunk) = stream_inner.next().await {
+                        response_buffer.push_str(&chunk);
+                        yield chunk;
+                    }
                 }
 
                 // Check for tool calls in the complete response
@@ -584,7 +626,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                             match tool {
                                 Some(tool) => {
-                                    match tool.execute(call.arguments) {
+                                    match tool.call(call.arguments) {
                                         Ok(result) => {
                                             tool_responses.push(format!(
                                                 "<tool_response>\n{}: {}\n</tool_response>",
