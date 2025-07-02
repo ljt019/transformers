@@ -139,10 +139,44 @@ let (tags, xml_parser) = Tags::new();
 pipeline.register_xml_parser(xml_parser);
 ```
 
-### Future Work: Automatic Event Parsing
-While not yet implemented, the design supports future automatic parsing where:
-- `completion()` would return `Output::Events(Vec<Event>)` when parser is registered
-- `completion_stream()` would yield `StreamOutput::Event(Event)` items
+### StreamOutput Implementation
+The streaming methods now return `StreamOutput` enum items that can be either text or events:
+
+```rust
+pub enum StreamOutput {
+    Text(String),      // Raw text chunk
+    Event(Event),      // Parsed XML event
+}
+```
+
+When an XML parser is registered:
+- `completion()` returns `Output::Events(Vec<Event>)` 
+- `completion_stream()` yields `StreamOutput::Event(Event)` items
+
+When no parser is registered:
+- `completion()` returns `Output::Text(String)`
+- `completion_stream()` yields `StreamOutput::Text(String)` items
+
+Example usage:
+```rust
+let mut stream = pipeline.completion_stream("Tell me about Rust")?;
+
+while let Some(output) = stream.next().await {
+    match output {
+        StreamOutput::Text(text) => {
+            print!("{}", text);
+        }
+        StreamOutput::Event(Event::Tagged { tag, content }) => {
+            if tag == &tags.think {
+                println!("[Thinking: {}]", content);
+            }
+        }
+        StreamOutput::Event(Event::Content(content)) => {
+            print!("{}", content);
+        }
+    }
+}
+```
 
 ## Benefits of Tag Registry Pattern
 
