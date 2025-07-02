@@ -1,6 +1,8 @@
 use super::text_generation_model::LanguageModelContext;
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling};
+use super::xml_parser::{Event, XmlParser};
+use super::{Output, StreamOutput};
 use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };
@@ -19,6 +21,7 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
     device: candle_core::Device,
     last_processed_tokens: Arc<Mutex<Vec<u32>>>,
     special_strings: std::collections::HashSet<String>,
+    xml_parser: Option<XmlParser>,
 }
 
 use async_stream::try_stream;
@@ -93,6 +96,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             device,
             last_processed_tokens: Arc::new(Mutex::new(Vec::new())),
             special_strings,
+            xml_parser: None,
         })
     }
 
@@ -101,15 +105,33 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.context.lock().unwrap().position()
     }
 
+    /// Register an XML parser to parse outputs into structured events
+    pub fn register_xml_parser(&mut self, xml_parser: XmlParser) {
+        self.xml_parser = Some(xml_parser);
+    }
+
+    /// Get a reference to the registered XML parser, if any
+    pub fn xml_parser(&self) -> Option<&XmlParser> {
+        self.xml_parser.as_ref()
+    }
+
     /// Generate a completion from either a prompt or a chat history.
-    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        match input.into() {
-            Input::Prompt(p) => self.prompt_completion(p),
-            Input::Messages(m) => self.message_completion(m),
+    /// Returns Output::Events if an XML parser is registered, Output::Text otherwise.
+    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<Output> {
+        let text = match input.into() {
+            Input::Prompt(p) => self.prompt_completion_internal(p)?,
+            Input::Messages(m) => self.message_completion_internal(m)?,
+        };
+
+        if let Some(xml_parser) = &self.xml_parser {
+            let events = xml_parser.parse_complete(&text);
+            Ok(Output::Events(events))
+        } else {
+            Ok(Output::Text(text))
         }
     }
 
-    pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<String> {
+    fn prompt_completion_internal(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset context for fresh generation
         self.context.lock().unwrap().reset();
 
@@ -129,7 +151,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.completion_from_tokens(&prompt_tokens)
     }
 
-    pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+    fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
         let templated_prompt = self.model.lock().unwrap().apply_chat_template(messages)?;
 
         let new_tokens = self
@@ -191,10 +213,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         Ok(response)
     }
 
-    pub fn prompt_completion_stream(
+    fn prompt_completion_stream(
         &self,
         prompt: &str,
-    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
         // Fresh turn → reset context
         self.context.lock().unwrap().reset();
 
@@ -210,28 +232,51 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .get_ids()
             .to_vec();
 
-        // Convert the internal Result stream into a user-friendly String stream.
+        // Convert the internal Result stream into a user-friendly stream.
         use futures::StreamExt;
         let inner = self.raw_completion_stream(tokens);
-        Ok(inner.map(unwrap_res))
+
+        if let Some(xml_parser) = &self.xml_parser {
+            xml_parser.reset();
+            let parser = xml_parser.clone();
+
+            use async_stream::stream;
+            Ok(Box::pin(stream! {
+                futures::pin_mut!(inner);
+                while let Some(result) = inner.next().await {
+                    let token = unwrap_res(result);
+                    let events = parser.parse_token(&token);
+                    for event in events {
+                        yield StreamOutput::Event(event);
+                    }
+                }
+
+                // Flush any remaining events
+                let final_events = parser.flush();
+                for event in final_events {
+                    yield StreamOutput::Event(event);
+                }
+            }))
+        } else {
+            Ok(Box::pin(inner.map(|r| StreamOutput::Text(unwrap_res(r)))))
+        }
     }
 
     /// Streaming version of [`completion`].
     pub fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send + 'a>>> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + 'a>>> {
         match input.into() {
-            Input::Prompt(p) => Ok(Box::pin(self.prompt_completion_stream(p)?)),
-            Input::Messages(m) => Ok(Box::pin(self.message_completion_stream(m)?)),
+            Input::Prompt(p) => self.prompt_completion_stream(p),
+            Input::Messages(m) => self.message_completion_stream(m),
         }
     }
 
-
-    pub fn message_completion_stream(
+    fn message_completion_stream(
         &self,
         messages: &[crate::Message],
-    ) -> anyhow::Result<impl Stream<Item = String> + Send + '_> {
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
         let templated = self.model.lock().unwrap().apply_chat_template(messages)?;
         let new_tokens = self
             .model_tokenizer
@@ -249,8 +294,32 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             let suffix = new_tokens[self.last_processed_tokens.lock().unwrap().len()..].to_vec();
             *self.last_processed_tokens.lock().unwrap() = new_tokens;
             let inner = self.raw_completion_stream(suffix);
+
             use futures::StreamExt;
-            return Ok(inner.map(unwrap_res));
+            if let Some(xml_parser) = &self.xml_parser {
+                xml_parser.reset();
+                let parser = xml_parser.clone();
+
+                use async_stream::stream;
+                return Ok(Box::pin(stream! {
+                    futures::pin_mut!(inner);
+                    while let Some(result) = inner.next().await {
+                        let token = unwrap_res(result);
+                        let events = parser.parse_token(&token);
+                        for event in events {
+                            yield StreamOutput::Event(event);
+                        }
+                    }
+
+                    // Flush any remaining events
+                    let final_events = parser.flush();
+                    for event in final_events {
+                        yield StreamOutput::Event(event);
+                    }
+                }));
+            } else {
+                return Ok(Box::pin(inner.map(|r| StreamOutput::Text(unwrap_res(r)))));
+            }
         } else {
             self.context.lock().unwrap().reset();
         }
@@ -258,7 +327,31 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         *self.last_processed_tokens.lock().unwrap() = new_tokens.clone();
         use futures::StreamExt;
         let inner = self.raw_completion_stream(new_tokens);
-        Ok(inner.map(unwrap_res))
+
+        if let Some(xml_parser) = &self.xml_parser {
+            xml_parser.reset();
+            let parser = xml_parser.clone();
+
+            use async_stream::stream;
+            Ok(Box::pin(stream! {
+                futures::pin_mut!(inner);
+                while let Some(result) = inner.next().await {
+                    let token = unwrap_res(result);
+                    let events = parser.parse_token(&token);
+                    for event in events {
+                        yield StreamOutput::Event(event);
+                    }
+                }
+
+                // Flush any remaining events
+                let final_events = parser.flush();
+                for event in final_events {
+                    yield StreamOutput::Event(event);
+                }
+            }))
+        } else {
+            Ok(Box::pin(inner.map(|r| StreamOutput::Text(unwrap_res(r)))))
+        }
     }
 
     fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
@@ -498,9 +591,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             // Generate assistant response for current state
             let assistant_response = if messages.len() == 1 {
                 // First turn – no previous context to reuse
-                self.prompt_completion(prompt)?
+                self.prompt_completion_internal(prompt)?
             } else {
-                self.message_completion(&messages)?
+                self.message_completion_internal(&messages)?
             };
 
             // Check for tool calls
@@ -652,7 +745,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         for _ in 0..MAX_TOOL_ITERATIONS {
             // Generate assistant response for current state
-            let assistant_response = self.message_completion(&messages)?;
+            let assistant_response = self.message_completion_internal(&messages)?;
 
             // Check for tool calls
             let tool_calls = Self::extract_tool_calls(&assistant_response)?;
@@ -827,16 +920,29 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                     };
 
                     let mut acc = String::new();
-                    while let Some(token) = response_stream.next().await {
-                        // Always add to the accumulator so our internal chat
-                        // history keeps the *full* text, including the
-                        // special delimiter tokens such as <|im_end|> that the
-                        // chat template relies on.
-                        acc.push_str(&token);
+                    while let Some(output) = response_stream.next().await {
+                        match output {
+                            StreamOutput::Text(text) => {
+                                // Always add to the accumulator so our internal chat
+                                // history keeps the *full* text, including the
+                                // special delimiter tokens such as <|im_end|> that the
+                                // chat template relies on.
+                                acc.push_str(&text);
 
-                        // Hide tokenizer-declared special tokens from user output
-                        if !special_strings.contains(&token) {
-                            yield token;
+                                // Hide tokenizer-declared special tokens from user output
+                                if !special_strings.contains(&text) {
+                                    yield text;
+                                }
+                            }
+                            StreamOutput::Event(event) => {
+                                // For events, accumulate the content for tool detection
+                                let content = event.get_content();
+                                acc.push_str(content);
+
+                                // Yield the content of the event
+                                // Note: This loses the tag information when yielding strings
+                                yield content.to_string();
+                            }
                         }
                     }
                     acc
