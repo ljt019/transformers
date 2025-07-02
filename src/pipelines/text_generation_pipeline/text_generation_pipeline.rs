@@ -122,18 +122,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             Input::Prompt(p) => self.prompt_completion_internal(p)?,
             Input::Messages(m) => self.message_completion_internal(m)?,
         };
-        
-        if let Some(xml_parser) = &self.xml_parser {
-            let events = xml_parser.parse_complete(&text);
-            Ok(Output::Events(events))
-        } else {
-            Ok(Output::Text(text))
-        }
-    }
 
-    pub fn prompt_completion(&self, prompt: &str) -> anyhow::Result<Output> {
-        let text = self.prompt_completion_internal(prompt)?;
-        
         if let Some(xml_parser) = &self.xml_parser {
             let events = xml_parser.parse_complete(&text);
             Ok(Output::Events(events))
@@ -160,17 +149,6 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .to_vec();
 
         self.completion_from_tokens(&prompt_tokens)
-    }
-
-    pub fn message_completion(&self, messages: &[crate::Message]) -> anyhow::Result<Output> {
-        let text = self.message_completion_internal(messages)?;
-        
-        if let Some(xml_parser) = &self.xml_parser {
-            let events = xml_parser.parse_complete(&text);
-            Ok(Output::Events(events))
-        } else {
-            Ok(Output::Text(text))
-        }
     }
 
     fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
@@ -235,7 +213,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         Ok(response)
     }
 
-    pub fn prompt_completion_stream(
+    fn prompt_completion_stream(
         &self,
         prompt: &str,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
@@ -257,11 +235,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         // Convert the internal Result stream into a user-friendly stream.
         use futures::StreamExt;
         let inner = self.raw_completion_stream(tokens);
-        
+
         if let Some(xml_parser) = &self.xml_parser {
             xml_parser.reset();
             let parser = xml_parser.clone();
-            
+
             use async_stream::stream;
             Ok(Box::pin(stream! {
                 futures::pin_mut!(inner);
@@ -272,7 +250,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                         yield StreamOutput::Event(event);
                     }
                 }
-                
+
                 // Flush any remaining events
                 let final_events = parser.flush();
                 for event in final_events {
@@ -295,8 +273,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         }
     }
 
-
-    pub fn message_completion_stream(
+    fn message_completion_stream(
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamOutput> + Send + '_>>> {
@@ -317,12 +294,12 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             let suffix = new_tokens[self.last_processed_tokens.lock().unwrap().len()..].to_vec();
             *self.last_processed_tokens.lock().unwrap() = new_tokens;
             let inner = self.raw_completion_stream(suffix);
-            
+
             use futures::StreamExt;
             if let Some(xml_parser) = &self.xml_parser {
                 xml_parser.reset();
                 let parser = xml_parser.clone();
-                
+
                 use async_stream::stream;
                 return Ok(Box::pin(stream! {
                     futures::pin_mut!(inner);
@@ -333,7 +310,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                             yield StreamOutput::Event(event);
                         }
                     }
-                    
+
                     // Flush any remaining events
                     let final_events = parser.flush();
                     for event in final_events {
@@ -350,11 +327,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         *self.last_processed_tokens.lock().unwrap() = new_tokens.clone();
         use futures::StreamExt;
         let inner = self.raw_completion_stream(new_tokens);
-        
+
         if let Some(xml_parser) = &self.xml_parser {
             xml_parser.reset();
             let parser = xml_parser.clone();
-            
+
             use async_stream::stream;
             Ok(Box::pin(stream! {
                 futures::pin_mut!(inner);
@@ -365,7 +342,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                         yield StreamOutput::Event(event);
                     }
                 }
-                
+
                 // Flush any remaining events
                 let final_events = parser.flush();
                 for event in final_events {
@@ -553,10 +530,6 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             }
         })
     }
-
-
-
-
 }
 
 impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
@@ -965,7 +938,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                 // For events, accumulate the content for tool detection
                                 let content = event.get_content();
                                 acc.push_str(content);
-                                
+
                                 // Yield the content of the event
                                 // Note: This loses the tag information when yielding strings
                                 yield content.to_string();
@@ -1115,8 +1088,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         Ok(calls)
     }
-
-
 }
 
 #[derive(Deserialize)]
