@@ -2,6 +2,7 @@ pub mod text_generation_model;
 pub mod text_generation_pipeline;
 pub mod text_generation_pipeline_builder;
 pub mod tool_error;
+pub mod xml_parser;
 
 pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 
@@ -32,6 +33,7 @@ pub use anyhow::Result;
 pub use std::io::Write;
 
 pub use tool_error::ToolError;
+pub use xml_parser::{Event, XmlParser, XmlParserBuilder};
 
 #[macro_export]
 macro_rules! tools {
