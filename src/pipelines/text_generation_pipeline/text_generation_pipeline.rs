@@ -1,6 +1,6 @@
 use super::base_pipeline::BasePipeline;
 
-use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling};
+use super::text_generation_model::{IntoTool, ToggleableReasoning, Tool, ToolCalling, LanguageModelContext};
 use super::text_generation_model::TextGenerationModel;
 use crate::models::generation::{initialize_logits_processor, apply_repeat_penalty, GenerationParams};
 use super::xml_parser::{Event, XmlParser};
@@ -314,7 +314,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     }
 
     pub fn registered_tools(&self) -> Vec<Tool> {
-        self.base.model.lock().unwrap().get_tools()
+        self.base.model.lock().unwrap().registered_tools()
     }
 
     pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
@@ -347,14 +347,13 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         // Create messages with user prompt
         let mut messages = vec![crate::Message::user(prompt)];
 
-        let tools = self.base.model.lock().unwrap().get_tools();
+        let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tool() first.");
         }
 
         loop {
             // Generate response
-            let mut last_role = messages.last().map(|m| &m.role).cloned();
             let templated = self.base.model.lock().unwrap().apply_chat_template(&messages)?;
             let tokens = self
                 .base.model_tokenizer
@@ -369,7 +368,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             match Self::extract_tool_calls(&response) {
                 Ok(tool_calls) if !tool_calls.is_empty() => {
                     // Add assistant message with tool calls
-                    messages.push(crate::Message::assistant(response));
+                    messages.push(crate::Message::assistant(&response));
 
                     // Execute tools and collect responses
                     let mut tool_responses = Vec::new();
@@ -399,7 +398,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                     // Add tool response message
                     let tool_response_text = tool_responses.join("\n");
-                    messages.push(crate::Message::user(tool_response_text));
+                    messages.push(crate::Message::user(&tool_response_text));
 
                     // Continue loop to generate final response
                 }
@@ -415,7 +414,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<String> {
-        let tools = self.base.model.lock().unwrap().get_tools();
+        let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tool() first.");
         }
@@ -449,7 +448,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 // Check for tool calls
                 match Self::extract_tool_calls(&response) {
                     Ok(tool_calls) if !tool_calls.is_empty() => {
-                        messages.push(crate::Message::assistant(response));
+                        messages.push(crate::Message::assistant(&response));
 
                         let mut tool_responses = Vec::new();
                         for call in tool_calls {
@@ -475,7 +474,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                         }
 
                         let tool_response_text = tool_responses.join("\n");
-                        messages.push(crate::Message::user(tool_response_text));
+                        messages.push(crate::Message::user(&tool_response_text));
                         continue;
                     }
                     _ => return Ok(response),
@@ -489,7 +488,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
             match Self::extract_tool_calls(&response) {
                 Ok(tool_calls) if !tool_calls.is_empty() => {
-                    messages.push(crate::Message::assistant(response));
+                    messages.push(crate::Message::assistant(&response));
 
                     let mut tool_responses = Vec::new();
                     for call in tool_calls {
@@ -515,7 +514,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                     }
 
                     let tool_response_text = tool_responses.join("\n");
-                    messages.push(crate::Message::user(tool_response_text));
+                    messages.push(crate::Message::user(&tool_response_text));
                 }
                 _ => return Ok(response),
             }
@@ -529,11 +528,13 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         use async_stream::stream;
         use futures::StreamExt;
 
-        let messages = vec![crate::Message::user(prompt.to_string())];
+        let messages = vec![crate::Message::user(prompt)];
         Ok(stream! {
             let mut messages = messages;
             
-            for await chunk in self.message_completion_stream_with_tools(&messages[..])? {
+            let stream = self.message_completion_stream_with_tools(&messages[..])?;
+            futures::pin_mut!(stream);
+            while let Some(chunk) = stream.next().await {
                 yield chunk;
             }
         })
@@ -546,7 +547,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         use async_stream::stream;
         use futures::StreamExt;
 
-        let tools = self.base.model.lock().unwrap().get_tools();
+        let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tool() first.");
         }
@@ -571,7 +572,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 match Self::extract_tool_calls(&response_buffer) {
                     Ok(tool_calls) if !tool_calls.is_empty() => {
                         // Add assistant message with tool calls
-                        messages.push(crate::Message::assistant(response_buffer.clone()));
+                        messages.push(crate::Message::assistant(&response_buffer));
                         response_buffer.clear();
 
                         // Execute tools
@@ -608,7 +609,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                         }
 
                         let tool_response_text = tool_responses.join("\n");
-                        messages.push(crate::Message::user(tool_response_text));
+                        messages.push(crate::Message::user(&tool_response_text));
 
                         // Continue to get the final response
                     }
