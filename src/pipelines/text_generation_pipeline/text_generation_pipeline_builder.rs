@@ -5,7 +5,7 @@ use crate::pipelines::utils::model_cache::global_cache;
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_pipeline::TextGenerationPipeline;
 use super::xml_generation_pipeline::XmlGenerationPipeline;
-use super::xml_parser::XmlParser;
+use super::xml_parser::{XmlParser, XmlParserBuilder};
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -101,7 +101,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         TextGenerationPipeline::new(model, gen_params)
     }
 
-    pub fn build_xml(self, xml_parser: XmlParser) -> anyhow::Result<XmlGenerationPipeline<M>>
+    pub fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: std::fmt::Display,
@@ -124,6 +124,12 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.top_k.unwrap_or(default_params.top_k),
             self.min_p.unwrap_or(default_params.min_p),
         );
+
+        let mut builder = XmlParserBuilder::new();
+        for tag in tags {
+            builder.register_tag(*tag);
+        }
+        let xml_parser = builder.build();
 
         XmlGenerationPipeline::new(model, gen_params, xml_parser)
     }

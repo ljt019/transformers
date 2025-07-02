@@ -75,8 +75,16 @@ impl Event {
         }
     }
 
-    /// Get the tag if this is a tagged event
-    pub fn tag(&self) -> Option<&Tag> {
+    /// Get the tag name if this is a tagged event
+    pub fn tag(&self) -> Option<&str> {
+        match self {
+            Event::Tagged { tag, .. } => Some(tag.name()),
+            Event::Content(_) => None,
+        }
+    }
+
+    /// Get the internal tag handle if needed
+    pub fn tag_handle(&self) -> Option<&Tag> {
         match self {
             Event::Tagged { tag, .. } => Some(tag),
             Event::Content(_) => None,
