@@ -10,8 +10,7 @@ fn main() -> Result<()> {
     // Build a pipeline with XML parsing capabilities
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
-        .with_xml_parser(xml_parser)
-        .build_xml()?;
+        .build_xml(xml_parser)?;
 
     // Generate completion - this will return Vec<Event>
     let events = pipeline.completion(

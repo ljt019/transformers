@@ -16,7 +16,6 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     top_p: Option<f64>,
     top_k: Option<usize>,
     min_p: Option<f64>,
-    xml_parser: Option<XmlParser>,
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
@@ -31,7 +30,6 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             top_p: None,
             top_k: None,
             min_p: None,
-            xml_parser: None,
         }
     }
 
@@ -75,20 +73,11 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
-    pub fn with_xml_parser(mut self, xml_parser: XmlParser) -> Self {
-        self.xml_parser = Some(xml_parser);
-        self
-    }
-
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: std::fmt::Display,
     {
-        if self.xml_parser.is_some() {
-            anyhow::bail!("Cannot build a TextGenerationPipeline with an XML parser registered. Use build_xml() instead.");
-        }
-
         // Always use the global cache to share models
         let cache_key = format!("{}", self.model_options);
         let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
@@ -111,14 +100,11 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         TextGenerationPipeline::new(model, gen_params)
     }
 
-    pub fn build_xml(self) -> anyhow::Result<XmlGenerationPipeline<M>>
+    pub fn build_xml(self, xml_parser: XmlParser) -> anyhow::Result<XmlGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: std::fmt::Display,
     {
-        let xml_parser = self.xml_parser
-            .ok_or_else(|| anyhow::anyhow!("Cannot build an XmlGenerationPipeline without an XML parser. Use with_xml_parser() first."))?;
-
         // Always use the global cache to share models
         let cache_key = format!("{}", self.model_options);
         let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
