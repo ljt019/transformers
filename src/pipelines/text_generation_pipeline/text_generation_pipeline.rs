@@ -15,11 +15,6 @@ use serde::Deserialize;
 use std::pin::Pin;
 use std::sync::Arc;
 
-// Helper to convert `anyhow::Result<String>` into `String` (panicking on error).
-fn unwrap_res(r: anyhow::Result<String>) -> String {
-    r.expect("stream generation failed")
-}
-
 /// Input for a text-generation request.
 #[derive(Debug, Clone)]
 pub enum Input<'a> {
@@ -183,13 +178,11 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .get_ids()
             .to_vec();
 
-        // Convert the internal Result stream into a user-friendly stream.
-        use futures::StreamExt;
         let inner = self.raw_completion_stream(tokens);
 
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(inner.map(unwrap_res)),
+                Box::pin(inner),
             ),
         )
     }
@@ -224,18 +217,16 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
                 new_tokens[self.base.last_processed_tokens.lock().unwrap().len()..].to_vec();
             *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
             let inner = self.raw_completion_stream(suffix);
-            use futures::StreamExt;
-            return Ok(crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(Box::pin(inner.map(unwrap_res))));
+            return Ok(crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(Box::pin(inner)));
         } else {
             self.base.context.lock().unwrap().reset();
         }
 
         *self.base.last_processed_tokens.lock().unwrap() = new_tokens.clone();
-        use futures::StreamExt;
         let inner = self.raw_completion_stream(new_tokens);
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(inner.map(unwrap_res)),
+                Box::pin(inner),
             ),
         )
     }
@@ -529,9 +520,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                 .find(|t| t.name == call.name)
                                 .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-                            let mut attempts = 0;
-                            loop {
-                                match tool.call(call.arguments.clone()) {
+                        let args = call.arguments.clone();
+                        let mut attempts = 0u32;
+                        loop {
+                            match tool.call(args.clone()) {
                                     Ok(result) => {
                                         tool_responses.push(format!(
                                             "<tool_response>\n{}: {}\n</tool_response>",
@@ -541,7 +533,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                     }
                                     Err(e) => {
                                         attempts += 1;
-                                        if attempts > tool.max_retries() {
+                                        if attempts >= tool.max_retries() {
                                             match tool.error_strategy() {
                                                 ErrorStrategy::Fail => {
                                                     return Err(anyhow::anyhow!(e))
@@ -554,6 +546,8 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                                     break;
                                                 }
                                             }
+                                        } else {
+                                            std::thread::sleep(std::time::Duration::from_millis(50));
                                         }
                                     }
                                 }
@@ -635,18 +629,16 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         let messages = vec![crate::Message::user(prompt)];
         let out_stream = try_stream! {
-
             let stream = self
-                .message_completion_stream_with_tools(&messages[..])
-                .expect("failed to create inner stream");
+                .message_completion_stream_with_tools(&messages[..])?;
             futures::pin_mut!(stream);
             while let Some(chunk) = stream.next().await {
-                yield chunk;
+                yield chunk?;
             }
         };
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(out_stream.map(unwrap_res)),
+                Box::pin(out_stream),
             ),
         )
     }
@@ -675,11 +667,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 // Stream the response
                 {
                     let stream_inner = self
-                        .completion_stream(&messages[..])
-                        .expect("failed to create completion stream");
+                        .completion_stream(&messages[..])?;
                     futures::pin_mut!(stream_inner);
 
-                    while let Some(chunk) = stream_inner.next().await {
+                    while let Some(chunk_res) = stream_inner.next().await {
+                        let chunk = chunk_res?;
                         response_buffer.push_str(&chunk);
                         yield chunk;
                     }
@@ -757,7 +749,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         };
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(out_stream.map(unwrap_res)),
+                Box::pin(out_stream),
             ),
         )
     }

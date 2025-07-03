@@ -45,7 +45,7 @@ async fn basic_streaming() -> anyhow::Result<()> {
     let mut acc = String::new();
     use futures::StreamExt;
     while let Some(tok) = stream.next().await {
-        acc.push_str(&tok);
+        acc.push_str(&tok?);
     }
     assert!(!acc.trim().is_empty());
     Ok(())
