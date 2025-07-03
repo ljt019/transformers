@@ -13,9 +13,11 @@ fn main() -> Result<()> {
     println!("\n--- Generated Events ---");
     for event in events {
         match event.tag() {
-            Some("think") => {
-                println!("[THINKING] {}", event.get_content());
-            }
+            Some("think") => match event.part() {
+                TagParts::Start => println!("[THINKING]"),
+                TagParts::Content => println!("{}", event.get_content()),
+                TagParts::End => println!(),
+            },
             _ => {
                 println!("[OUTPUT] {}", event.get_content());
             }

@@ -34,33 +34,41 @@ async fn main() -> Result<()> {
 
     while let Some(event) = stream.next().await {
         match event.tag() {
-            // Content inside <think>...</think>
-            Some("think") => {
-                if !in_thinking {
-                    // First token under the THINKING header
+            Some("think") => match event.part() {
+                TagParts::Start => {
                     println!("[THINKING]");
                     in_thinking = true;
                 }
-                print!("{}", event.get_content());
-            }
-            // Content emitted by a tool call
-            Some("tool_response") => {
-                // Close THINKING block if we were inside one
-                if in_thinking {
+                TagParts::Content => {
+                    print!("{}", event.get_content());
+                }
+                TagParts::End => {
                     println!();
                     in_thinking = false;
                 }
-                print!("[TOOL] {}", event.get_content());
-            }
-            // Regular model output
-            _ => {
-                // Close THINKING block if we were inside one
-                if in_thinking {
-                    println!();
-                    in_thinking = false;
+            },
+            Some("tool_response") => match event.part() {
+                TagParts::Start => {
+                    // close thinking if open
+                    if in_thinking {
+                        println!();
+                        in_thinking = false;
+                    }
+                    print!("[TOOL] ");
                 }
-                print!("{}", event.get_content());
-            }
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!(),
+            },
+            _ => match event.part() {
+                TagParts::Content => {
+                    if in_thinking {
+                        println!();
+                        in_thinking = false;
+                    }
+                    print!("{}", event.get_content());
+                }
+                _ => {}
+            },
         }
         std::io::stdout().flush().unwrap();
     }
