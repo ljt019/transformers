@@ -430,9 +430,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
                         // Execute the tool with retries
-                        let mut attempts = 0;
+                        let args = call.arguments.clone();
+                        let mut attempts = 0u32;
                         loop {
-                            match tool.call(call.arguments.clone()) {
+                            match tool.call(args.clone()) {
                                 Ok(result) => {
                                     tool_responses.push(format!(
                                         "<tool_response>\n{}: {}\n</tool_response>",
@@ -442,7 +443,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                 }
                                 Err(e) => {
                                     attempts += 1;
-                                    if attempts > tool.max_retries() {
+                                    if attempts >= tool.max_retries() {
                                         match tool.error_strategy() {
                                             ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
                                             ErrorStrategy::ReturnToModel => {
@@ -453,6 +454,8 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                                 break;
                                             }
                                         }
+                                    } else {
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
                                     }
                                 }
                             }
@@ -581,18 +584,34 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                             .find(|t| t.name == call.name)
                             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-                        match tool.call(call.arguments) {
-                            Ok(result) => {
-                                tool_responses.push(format!(
-                                    "<tool_response>\n{}: {}\n</tool_response>",
-                                    call.name, result
-                                ));
-                            }
-                            Err(e) => {
-                                tool_responses.push(format!(
-                                    "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                    call.name, e
-                                ));
+                        let args = call.arguments.clone();
+                        let mut attempts = 0u32;
+                        loop {
+                            match tool.call(args.clone()) {
+                                Ok(result) => {
+                                    tool_responses.push(format!(
+                                        "<tool_response>\n{}: {}\n</tool_response>",
+                                        call.name, result
+                                    ));
+                                    break;
+                                }
+                                Err(e) => {
+                                    attempts += 1;
+                                    if attempts >= tool.max_retries() {
+                                        match tool.error_strategy() {
+                                            ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
+                                            ErrorStrategy::ReturnToModel => {
+                                                tool_responses.push(format!(
+                                                    "<tool_response>\n{}: Error: {}\n</tool_response>",
+                                                    call.name, e
+                                                ));
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        std::thread::sleep(std::time::Duration::from_millis(50));
+                                    }
+                                }
                             }
                         }
                     }
@@ -611,11 +630,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     ) -> anyhow::Result<
         crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'_>,
     > {
-        use async_stream::stream;
+        use async_stream::try_stream;
         use futures::StreamExt;
 
         let messages = vec![crate::Message::user(prompt)];
-        let out_stream = stream! {
+        let out_stream = try_stream! {
 
             let stream = self
                 .message_completion_stream_with_tools(&messages[..])
@@ -627,7 +646,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         };
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(out_stream),
+                Box::pin(out_stream.map(unwrap_res)),
             ),
         )
     }
@@ -638,7 +657,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     ) -> anyhow::Result<
         crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'_>,
     > {
-        use async_stream::stream;
+        use async_stream::try_stream;
         use futures::StreamExt;
 
         let tools = self.base.model.lock().unwrap().registered_tools();
@@ -648,7 +667,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         let initial_messages = messages.to_vec();
 
-        let out_stream = stream! {
+        let out_stream = try_stream! {
             let mut messages = initial_messages;
             let mut response_buffer = String::new();
 
@@ -682,9 +701,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                             match tool {
                                 Some(tool) => {
-                                    let mut attempts = 0;
+                                    let args = call.arguments.clone();
+                                    let mut attempts = 0u32;
                                     loop {
-                                        match tool.call(call.arguments.clone()) {
+                                        match tool.call(args.clone()) {
                                             Ok(result) => {
                                                 tool_responses.push(format!(
                                                     "<tool_response>\n{}: {}\n</tool_response>",
@@ -694,14 +714,10 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                             }
                                             Err(e) => {
                                                 attempts += 1;
-                                                if attempts > tool.max_retries() {
+                                                if attempts >= tool.max_retries() {
                                                     match tool.error_strategy() {
                                                         ErrorStrategy::Fail => {
-                                                            tool_responses.push(format!(
-                                                                "<tool_response>\n{}: Error: {} (failed after {} attempts)\n</tool_response>",
-                                                                call.name, e, attempts
-                                                            ));
-                                                            break;
+                                                            Err(anyhow::anyhow!(e))?;
                                                         }
                                                         ErrorStrategy::ReturnToModel => {
                                                             tool_responses.push(format!(
@@ -711,6 +727,8 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                                                             break;
                                                         }
                                                     }
+                                                } else {
+                                                    std::thread::sleep(std::time::Duration::from_millis(50));
                                                 }
                                             }
                                         }
@@ -739,7 +757,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         };
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(out_stream),
+                Box::pin(out_stream.map(unwrap_res)),
             ),
         )
     }
