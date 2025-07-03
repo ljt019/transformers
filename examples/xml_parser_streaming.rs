@@ -29,54 +29,25 @@ async fn main() -> Result<()> {
 
     println!("\n--- Streaming Events ---");
 
-    // Track whether we are currently printing content inside a <think> tag
-    let mut in_thinking = false;
-
     while let Some(event) = stream.next().await {
         match event.tag() {
             Some("think") => match event.part() {
-                TagParts::Start => {
-                    println!("[THINKING]");
-                    in_thinking = true;
-                }
-                TagParts::Content => {
-                    print!("{}", event.get_content());
-                }
-                TagParts::End => {
-                    println!();
-                    in_thinking = false;
-                }
-            },
-            Some("tool_response") => match event.part() {
-                TagParts::Start => {
-                    // close thinking if open
-                    if in_thinking {
-                        println!();
-                        in_thinking = false;
-                    }
-                    print!("[TOOL] ");
-                }
+                TagParts::Start => println!("[THINKING]"),
                 TagParts::Content => print!("{}", event.get_content()),
                 TagParts::End => println!(),
             },
-            _ => match event.part() {
-                TagParts::Content => {
-                    if in_thinking {
-                        println!();
-                        in_thinking = false;
-                    }
-                    print!("{}", event.get_content());
-                }
-                _ => {}
+            Some("tool_response") => match event.part() {
+                TagParts::Start => print!("[TOOL] "),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!(),
+            },
+            _ => if event.part() == TagParts::Content {
+                print!("{}", event.get_content());
             },
         }
         std::io::stdout().flush().unwrap();
     }
 
-    // Ensure we end with a newline
-    if in_thinking {
-        println!();
-    }
     println!();
 
     Ok(())
