@@ -544,6 +544,12 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
+impl crate::pipelines::utils::model_cache::ModelOptions for Qwen3Size {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
@@ -816,7 +822,6 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
-use serde_json::Value;
 
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {

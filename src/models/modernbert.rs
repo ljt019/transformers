@@ -633,6 +633,15 @@ pub enum ModernBertSize {
     Large,
 }
 
+impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
+    fn cache_key(&self) -> String {
+        match self {
+            ModernBertSize::Base => "modernbert-base".to_string(),
+            ModernBertSize::Large => "modernbert-large".to_string(),
+        }
+    }
+}
+
 /// Fill-mask model using ModernBERT.
 #[derive(Clone)]
 pub struct FillMaskModernBertModel {

@@ -1,17 +1,8 @@
-#![allow(warnings)]
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
 
 mod loaders;
 mod models;
 pub mod pipelines;
 
-pub(crate) const DEFAULT_TEMPERATURE: f64 = 0.7;
-pub(crate) const DEFAULT_REPEAT_PENALTY: f32 = 1.1;
-pub(crate) const DEFAULT_REPEAT_LAST_N: usize = 64;
-pub(crate) const DEFAULT_SEED: u64 = 299792458;
 
 // Re-export the `#[tool]` procedural macro so users can simply write
 // `use transformers::tool;` and annotate their functions without adding an

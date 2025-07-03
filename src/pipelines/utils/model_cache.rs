@@ -8,6 +8,11 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Trait implemented by model option types to generate a stable cache key.
+pub trait ModelOptions {
+    fn cache_key(&self) -> String;
+}
+
 /// A thread-safe cache for model instances.
 ///
 /// The cache stores models by a string key (typically the model size/variant)

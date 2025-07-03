@@ -5,11 +5,13 @@ pub mod text_generation_pipeline_builder;
 pub mod tool_error;
 pub mod xml_generation_pipeline;
 pub mod xml_parser;
+pub mod completion_stream;
 
 pub use crate::tools;
 pub use text_generation_pipeline::{Input, TextGenerationPipeline};
 pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
+pub use completion_stream::CompletionStream;
 
 // Convenience re-exports so users can simply
 // `use transformers::pipelines::text_generation_pipeline::*;` and access
