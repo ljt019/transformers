@@ -4,6 +4,8 @@
 
 This review examines the transformers crate (v0.0.10), a Rust library providing intuitive interfaces for working with Large Language Models locally. The library is well-structured with a clear separation of concerns and good use of Rust idioms. Below are actionable recommendations for improving internal code quality and external API ergonomics.
 
+**Update**: Some issues in this review have been addressed in recent updates. Items marked with ✅ RESOLVED have been fixed in the current codebase.
+
 ## 1. Internal Library Improvements
 
 ### Code Organization and Architecture
@@ -110,23 +112,13 @@ trait ModelOptions {
 **Rationale**: More efficient and predictable cache key generation.
 
 #### 1.8 XML Parser State Management
-**Issue**: `xml_parser.rs` locks mutex for every character processed.
-**Recommendation**: Process in larger chunks to reduce lock contention:
-```rust
-pub fn parse_token(&self, token: &str) -> Vec<Event> {
-    let chars: Vec<char> = token.chars().collect();
-    let mut state = self.state.lock().unwrap();
-    // Process all chars while holding the lock once
-    let mut events = Vec::new();
-    for char in chars {
-        if let Some(event) = self.process_char_internal(&mut state, char) {
-            events.push(event);
-        }
-    }
-    events
-}
-```
-**Rationale**: Reduces mutex contention in streaming scenarios.
+**Status**: ✅ RESOLVED
+**Previous Issue**: `xml_parser.rs` locked mutex for every character processed.
+**Current Implementation**: The parser now processes entire tokens at once, locking the mutex only once per `parse_token` call. Additionally, it implements true streaming with incremental content emission, emitting content as it arrives rather than waiting for tag closure.
+**Additional Improvements**:
+- TagParts API for event-based parsing (Start/Content/End)
+- Efficient tag handle system using IDs instead of string comparisons
+- Memory-efficient tracking of emitted content to avoid duplication
 
 ## 2. External API Improvements
 
@@ -315,7 +307,9 @@ async fn test_streaming_tool_calls() {
 **Test**: Verify all pipelines handle empty inputs gracefully
 
 #### 3.7 Malformed XML in Streaming
+**Status**: ✅ RESOLVED
 **Test**: Verify XML parser handles malformed tags in streaming context
+**Current Implementation**: The parser includes comprehensive test coverage for malformed XML scenarios (see `test_malformed_xml` in xml_parser.rs). Unclosed tags are properly handled in the `flush()` method by emitting remaining content and end events. Unregistered tags are treated as regular content.
 
 #### 3.8 Token Limit Edge Cases
 **Test**: Verify behavior at exact token limits (max_len, context size)
