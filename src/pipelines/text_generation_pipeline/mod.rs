@@ -38,7 +38,7 @@ pub use anyhow::Result;
 pub use std::io::Write;
 
 pub use tool_error::ToolError;
-pub use xml_parser::{Event, XmlParser, XmlParserBuilder};
+pub use xml_parser::{Event, XmlParser, XmlParserBuilder, TagParts};
 
 #[macro_export]
 macro_rules! tools {

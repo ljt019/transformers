@@ -29,46 +29,25 @@ async fn main() -> Result<()> {
 
     println!("\n--- Streaming Events ---");
 
-    // Track whether we are currently printing content inside a <think> tag
-    let mut in_thinking = false;
-
     while let Some(event) = stream.next().await {
         match event.tag() {
-            // Content inside <think>...</think>
-            Some("think") => {
-                if !in_thinking {
-                    // First token under the THINKING header
-                    println!("[THINKING]");
-                    in_thinking = true;
-                }
+            Some("think") => match event.part() {
+                TagParts::Start => println!("[THINKING]"),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!(),
+            },
+            Some("tool_response") => match event.part() {
+                TagParts::Start => print!("[TOOL] "),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!(),
+            },
+            _ => if event.part() == TagParts::Content {
                 print!("{}", event.get_content());
-            }
-            // Content emitted by a tool call
-            Some("tool_response") => {
-                // Close THINKING block if we were inside one
-                if in_thinking {
-                    println!();
-                    in_thinking = false;
-                }
-                print!("[TOOL] {}", event.get_content());
-            }
-            // Regular model output
-            _ => {
-                // Close THINKING block if we were inside one
-                if in_thinking {
-                    println!();
-                    in_thinking = false;
-                }
-                print!("{}", event.get_content());
-            }
+            },
         }
         std::io::stdout().flush().unwrap();
     }
 
-    // Ensure we end with a newline
-    if in_thinking {
-        println!();
-    }
     println!();
 
     Ok(())

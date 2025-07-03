@@ -44,51 +44,72 @@ impl PartialEq<&Tag> for Tag {
     }
 }
 
-/// An event emitted by the XML parser containing the tag and content
+/// Parts of a tag emitted as events during parsing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagParts {
+    /// Opening of a tag
+    Start,
+    /// Content inside a tag or outside any tag
+    Content,
+    /// Closing of a tag
+    End,
+}
+
+/// An event emitted by the XML parser
 #[derive(Debug, Clone, PartialEq)]
-pub enum Event {
-    /// Content inside a specific XML tag
-    Tagged { tag: Tag, content: String },
-    /// Content outside any registered XML tags  
-    Content(String),
+pub struct Event {
+    tag: Option<Tag>,
+    part: TagParts,
+    content: String,
 }
 
 impl Event {
-    /// Create a new tagged event (for internal use)
-    fn tagged_internal(tag: Tag, content: impl Into<String>) -> Self {
-        Self::Tagged {
+    fn new(tag: Option<Tag>, part: TagParts, content: impl Into<String>) -> Self {
+        Self {
             tag,
+            part,
             content: content.into(),
         }
     }
 
-    /// Create a new content event
+    /// Create a new content event outside any tag
     pub fn content(content: impl Into<String>) -> Self {
-        Self::Content(content.into())
+        Self::new(None, TagParts::Content, content)
     }
 
-    /// Get the content string regardless of event type
+    /// Create a new start event for a tag
+    pub fn start(tag: Tag) -> Self {
+        Self::new(Some(tag), TagParts::Start, "")
+    }
+
+    /// Create a new end event for a tag
+    pub fn end(tag: Tag) -> Self {
+        Self::new(Some(tag), TagParts::End, "")
+    }
+
+    /// Create a new content event inside a tag
+    fn tagged_internal(tag: Tag, content: impl Into<String>) -> Self {
+        Self::new(Some(tag), TagParts::Content, content)
+    }
+
+    /// Get the content string
     pub fn get_content(&self) -> &str {
-        match self {
-            Event::Tagged { content, .. } => content,
-            Event::Content(content) => content,
-        }
+        &self.content
     }
 
-    /// Get the tag name if this is a tagged event
+    /// Get the tag name if present
     pub fn tag(&self) -> Option<&str> {
-        match self {
-            Event::Tagged { tag, .. } => Some(tag.name()),
-            Event::Content(_) => None,
-        }
+        self.tag.as_ref().map(|t| t.name())
     }
 
-    /// Get the internal tag handle if needed
+    /// Get the internal tag handle
     pub fn tag_handle(&self) -> Option<&Tag> {
-        match self {
-            Event::Tagged { tag, .. } => Some(tag),
-            Event::Content(_) => None,
-        }
+        self.tag.as_ref()
+    }
+
+    /// Get the part of the tag this event corresponds to
+    pub fn part(&self) -> TagParts {
+        self.part
     }
 }
 
@@ -204,12 +225,10 @@ impl XmlParser {
         let mut events = Vec::new();
 
         for char in text.chars() {
-            if let Some(event) = self.process_char(char) {
-                events.push(event);
-            }
+            let mut evs = self.process_char(char);
+            events.append(&mut evs);
         }
 
-        // Flush any remaining content
         events.extend(self.flush());
         events
     }
@@ -219,9 +238,8 @@ impl XmlParser {
         let mut events = Vec::new();
 
         for char in token.chars() {
-            if let Some(event) = self.process_char(char) {
-                events.push(event);
-            }
+            let mut evs = self.process_char(char);
+            events.append(&mut evs);
         }
 
         // Emit the newly appended slice either for top-level content or for the currently
@@ -261,51 +279,47 @@ impl XmlParser {
     }
 
     /// Process a single character and return an event if one is ready
-    fn process_char(&self, c: char) -> Option<Event> {
+    fn process_char(&self, c: char) -> Vec<Event> {
+        let mut events = Vec::new();
         let mut state = self.state.lock().unwrap();
 
         match c {
             '<' => {
-                // Start of a potential tag
                 state.in_tag = true;
                 state.tag_buffer.clear();
                 state.tag_buffer.push(c);
-                None
             }
             '>' if state.in_tag => {
-                // End of tag
                 state.tag_buffer.push(c);
                 state.in_tag = false;
 
                 let tag_content = state.tag_buffer.clone();
                 state.tag_buffer.clear();
 
-                self.handle_tag(&mut state, &tag_content)
+                events.extend(self.handle_tag(&mut state, &tag_content));
             }
             _ if state.in_tag => {
-                // Inside a tag, accumulate
                 state.tag_buffer.push(c);
-                None
             }
             _ => {
-                // Regular content character
-                // Check if we're inside any registered tag
                 if let Some((_, ref mut content)) = state.open_tags.last_mut() {
                     content.push(c);
                 } else {
                     state.content_buffer.push(c);
                 }
-                None
             }
         }
+
+        events
     }
 
     /// Handle a complete tag and return an event if one is ready
-    fn handle_tag(&self, state: &mut ParserState, tag_content: &str) -> Option<Event> {
+    fn handle_tag(&self, state: &mut ParserState, tag_content: &str) -> Vec<Event> {
+        let mut events = Vec::new();
+
         if let Some(tag_name) = self.parse_tag_name(tag_content) {
             if self.registered_tags.contains(&tag_name) {
                 if tag_content.starts_with("</") {
-                    // Closing tag - find matching opening tag
                     if let Some(pos) = state
                         .open_tags
                         .iter()
@@ -313,55 +327,47 @@ impl XmlParser {
                     {
                         let (_, content) = state.open_tags.remove(pos);
 
-                        // Determine any remaining (not yet emitted) text for this tag.
                         let already_emitted = state.emitted_tag_lens.remove(&tag_name).unwrap_or(0);
 
-                        if content.len() > already_emitted {
-                            if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                                return Some(Event::tagged_internal(
+                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                            if content.len() > already_emitted {
+                                events.push(Event::tagged_internal(
                                     tag_handle.clone(),
                                     content[already_emitted..].to_string(),
                                 ));
                             }
+                            events.push(Event::end(tag_handle.clone()));
                         }
                     }
                 } else if !tag_content.ends_with("/>") {
-                    // Opening tag (not self-closing)
-                    // First emit any pending content if we're at top level
                     if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
                         let content = state.content_buffer[state.emitted_top_len..].to_string();
                         state.emitted_top_len = state.content_buffer.len();
-                        // We need to push the tag AFTER emitting content
-                        state.open_tags.push((tag_name.clone(), String::new()));
-                        return Some(Event::content(content));
+                        events.push(Event::content(content));
                     }
 
-                    state.open_tags.push((tag_name, String::new()));
-                }
-            } else {
-                // Tag not registered, treat as content
-                if state.open_tags.is_empty() {
-                    state.content_buffer.push_str(tag_content);
-                } else {
-                    // We're inside a registered tag, add to its content
-                    if let Some((_, ref mut content)) = state.open_tags.last_mut() {
-                        content.push_str(tag_content);
+                    state.open_tags.push((tag_name.clone(), String::new()));
+
+                    if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                        events.push(Event::start(tag_handle.clone()));
                     }
                 }
-            }
-        } else {
-            // Invalid tag, treat as content
-            if state.open_tags.is_empty() {
-                state.content_buffer.push_str(tag_content);
             } else {
-                // We're inside a registered tag, add to its content
-                if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+                if state.open_tags.is_empty() {
+                    state.content_buffer.push_str(tag_content);
+                } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
                     content.push_str(tag_content);
                 }
             }
+        } else {
+            if state.open_tags.is_empty() {
+                state.content_buffer.push_str(tag_content);
+            } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+                content.push_str(tag_content);
+            }
         }
 
-        None
+        events
     }
 
     /// Extract tag name from tag content (e.g., "<think>" -> "think", "</think>" -> "think")
@@ -407,13 +413,14 @@ impl XmlParser {
         for (tag_name, content) in drained {
             let already_emitted = state.emitted_tag_lens.remove(&tag_name).unwrap_or(0);
 
-            if content.len() > already_emitted {
-                if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+            if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                if content.len() > already_emitted {
                     events.push(Event::tagged_internal(
                         tag_handle.clone(),
                         content[already_emitted..].to_string(),
                     ));
                 }
+                events.push(Event::end(tag_handle.clone()));
             }
         }
 
@@ -439,15 +446,14 @@ mod tests {
         let text = "<think>Hello world</think>Regular content";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 2);
-        match &events[0] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &think_tag);
-                assert_eq!(content, "Hello world");
-            }
-            _ => panic!("Expected tagged event"),
-        }
-        assert_eq!(events[1], Event::content("Regular content"));
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Hello world");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), Some(&think_tag));
+        assert_eq!(events[3], Event::content("Regular content"));
     }
 
     #[test]
@@ -465,15 +471,18 @@ mod tests {
         }
         all_events.extend(parser.flush());
 
-        assert_eq!(all_events.len(), 2);
-        match &all_events[0] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &think_tag);
-                assert_eq!(content, "Hello world");
-            }
-            _ => panic!("Expected tagged event"),
-        }
-        assert_eq!(all_events[1], Event::content("Regular"));
+        assert_eq!(all_events.len(), 6);
+        assert_eq!(all_events[0].part(), TagParts::Start);
+        assert_eq!(all_events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(all_events[1].part(), TagParts::Content);
+        assert_eq!(all_events[1].get_content(), "Hello");
+        assert_eq!(all_events[2].part(), TagParts::Content);
+        assert_eq!(all_events[2].get_content(), " ");
+        assert_eq!(all_events[3].part(), TagParts::Content);
+        assert_eq!(all_events[3].get_content(), "world");
+        assert_eq!(all_events[4].part(), TagParts::End);
+        assert_eq!(all_events[4].tag_handle(), Some(&think_tag));
+        assert_eq!(all_events[5], Event::content("Regular"));
     }
 
     #[test]
@@ -486,22 +495,20 @@ mod tests {
         let text = "<think>Thinking</think>Content<tool_response>Response</tool_response>";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 3);
-        match &events[0] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &think_tag);
-                assert_eq!(content, "Thinking");
-            }
-            _ => panic!("Expected tagged event"),
-        }
-        assert_eq!(events[1], Event::content("Content"));
-        match &events[2] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &tool_response_tag);
-                assert_eq!(content, "Response");
-            }
-            _ => panic!("Expected tagged event"),
-        }
+        assert_eq!(events.len(), 7);
+        assert_eq!(events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Thinking");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), Some(&think_tag));
+        assert_eq!(events[3], Event::content("Content"));
+        assert_eq!(events[4].tag_handle(), Some(&tool_response_tag));
+        assert_eq!(events[4].part(), TagParts::Start);
+        assert_eq!(events[5].part(), TagParts::Content);
+        assert_eq!(events[5].get_content(), "Response");
+        assert_eq!(events[6].part(), TagParts::End);
+        assert_eq!(events[6].tag_handle(), Some(&tool_response_tag));
     }
 
     #[test]
@@ -513,15 +520,14 @@ mod tests {
         let text = "<think>Registered</think><other>Not registered</other>";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 2);
-        match &events[0] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &think_tag);
-                assert_eq!(content, "Registered");
-            }
-            _ => panic!("Expected tagged event"),
-        }
-        assert_eq!(events[1], Event::content("<other>Not registered</other>"));
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Registered");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), Some(&think_tag));
+        assert_eq!(events[3], Event::content("<other>Not registered</other>"));
     }
 
     #[test]
@@ -533,13 +539,12 @@ mod tests {
         let text = "<think>Unclosed tag content";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            Event::Tagged { tag, content } => {
-                assert_eq!(tag, &think_tag);
-                assert_eq!(content, "Unclosed tag content");
-            }
-            _ => panic!("Expected tagged event"),
-        }
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Unclosed tag content");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), Some(&think_tag));
     }
 }
