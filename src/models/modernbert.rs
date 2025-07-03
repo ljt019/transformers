@@ -633,12 +633,19 @@ pub enum ModernBertSize {
     Large,
 }
 
+impl std::fmt::Display for ModernBertSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ModernBertSize::Base => "modernbert-base",
+            ModernBertSize::Large => "modernbert-large",
+        };
+        write!(f, "{}", name)
+    }
+}
+
 impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
     fn cache_key(&self) -> String {
-        match self {
-            ModernBertSize::Base => "modernbert-base".to_string(),
-            ModernBertSize::Large => "modernbert-large".to_string(),
-        }
+        self.to_string()
     }
 }
 

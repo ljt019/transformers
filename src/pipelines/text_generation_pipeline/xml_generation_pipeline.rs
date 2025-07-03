@@ -607,7 +607,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
         let messages = vec![crate::Message::user(prompt)];
         Ok(stream! {
-            let messages = messages;
 
             let stream = self
                 .message_completion_stream_with_tools(&messages[..])

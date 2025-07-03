@@ -22,7 +22,10 @@ impl<'a> CompletionStream<'a> {
         out
     }
 
-    /// Take the first `n` chunks from the stream.
+    /// Take up to `n` chunks from the stream.
+    ///
+    /// If the underlying stream ends before `n` chunks are yielded,
+    /// the returned vector will contain fewer elements.
     pub async fn take(mut self, n: usize) -> Vec<String> {
         use futures::StreamExt;
         let mut out = Vec::new();

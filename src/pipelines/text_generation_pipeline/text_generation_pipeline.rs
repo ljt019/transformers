@@ -616,7 +616,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
         let messages = vec![crate::Message::user(prompt)];
         let out_stream = stream! {
-            let messages = messages;
 
             let stream = self
                 .message_completion_stream_with_tools(&messages[..])
@@ -683,18 +682,37 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                             match tool {
                                 Some(tool) => {
-                                    match tool.call(call.arguments) {
-                                        Ok(result) => {
-                                            tool_responses.push(format!(
-                                                "<tool_response>\n{}: {}\n</tool_response>",
-                                                call.name, result
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            tool_responses.push(format!(
-                                                "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                                call.name, e
-                                            ));
+                                    let mut attempts = 0;
+                                    loop {
+                                        match tool.call(call.arguments.clone()) {
+                                            Ok(result) => {
+                                                tool_responses.push(format!(
+                                                    "<tool_response>\n{}: {}\n</tool_response>",
+                                                    call.name, result
+                                                ));
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                attempts += 1;
+                                                if attempts > tool.max_retries() {
+                                                    match tool.error_strategy() {
+                                                        ErrorStrategy::Fail => {
+                                                            tool_responses.push(format!(
+                                                                "<tool_response>\n{}: Error: {} (failed after {} attempts)\n</tool_response>",
+                                                                call.name, e, attempts
+                                                            ));
+                                                            break;
+                                                        }
+                                                        ErrorStrategy::ReturnToModel => {
+                                                            tool_responses.push(format!(
+                                                                "<tool_response>\n{}: Error: {}\n</tool_response>",
+                                                                call.name, e
+                                                            ));
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
