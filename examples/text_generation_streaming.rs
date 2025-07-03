@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
 
     println!("\n--- Generated Text ---");
     while let Some(tok) = stream.next().await {
-        print!("{}", tok);
+        print!("{}", tok?);
         std::io::stdout().flush().unwrap();
     }
 
@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
 
     println!("\n--- Generated Text 2 ---");
     while let Some(tok) = stream_two.next().await {
-        print!("{}", tok);
+        print!("{}", tok?);
         std::io::stdout().flush().unwrap();
     }
 

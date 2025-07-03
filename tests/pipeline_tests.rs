@@ -45,7 +45,7 @@ async fn basic_streaming() -> anyhow::Result<()> {
     let mut acc = String::new();
     use futures::StreamExt;
     while let Some(tok) = stream.next().await {
-        acc.push_str(&tok);
+        acc.push_str(&tok?);
     }
     assert!(!acc.trim().is_empty());
     Ok(())
@@ -74,5 +74,92 @@ fn basic_sentiment() -> anyhow::Result<()> {
     let pipeline = SentimentAnalysisPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
     let res = pipeline.predict("I love Rust!")?;
     assert!(!res.trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_context_overflow_recovery() -> anyhow::Result<()> {
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(0)
+        .max_len(4)
+        .build()?;
+
+    let max_ctx = pipeline.max_context_length();
+
+    // Generate repeatedly until we exceed the context
+    for _ in 0..(max_ctx / 2 + 2) {
+        let _ = pipeline.completion("hello")?;
+    }
+
+    // Context should be less than the limit after auto reset
+    assert!(pipeline.context_position() < max_ctx);
+    Ok(())
+}
+
+#[tool(on_error = ErrorStrategy::Fail, retries = 1)]
+fn fail_tool() -> Result<String, ToolError> {
+    Err(ToolError::Message("boom".into()))
+}
+
+#[tool(on_error = ErrorStrategy::ReturnToModel, retries = 1)]
+fn fail_tool_model() -> Result<String, ToolError> {
+    Err(ToolError::Message("boom".into()))
+}
+
+#[test]
+fn test_tool_error_strategies() -> anyhow::Result<()> {
+    // Fail strategy should propagate the error
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(0)
+        .max_len(32)
+        .build()?;
+    pipeline.register_tools(tools![fail_tool])?;
+    assert!(pipeline.completion_with_tools("call fail_tool").is_err());
+
+    // ReturnToModel strategy should succeed with error message in output
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(0)
+        .max_len(32)
+        .build()?;
+    pipeline.register_tools(tools![fail_tool_model])?;
+    let out = pipeline.completion_with_tools("call fail_tool_model")?;
+    assert!(out.contains("Error:"));
+    Ok(())
+}
+
+#[test]
+fn test_empty_input_handling() -> anyhow::Result<()> {
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(0)
+        .max_len(4)
+        .build()?;
+    let out = pipeline.completion("")?;
+    assert!(!out.trim().is_empty());
+
+    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
+    let res = pipeline.fill_mask("")?;
+    assert!(!res.trim().is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_token_limit_edge_cases() -> anyhow::Result<()> {
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(0)
+        .max_len(8)
+        .build()?;
+
+    let max_ctx = pipeline.max_context_length();
+    let prompt = "hello";
+
+    // Fill up to exactly the limit
+    while pipeline.context_position() + 2 < max_ctx {
+        let _ = pipeline.completion(prompt)?;
+    }
+
+    // Next generation should still work and reset when hitting the limit
+    let _ = pipeline.completion(prompt)?;
+    assert!(pipeline.context_position() < max_ctx);
     Ok(())
 }

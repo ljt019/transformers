@@ -14,7 +14,7 @@ use futures::Stream;
 use regex::Regex;
 use serde::Deserialize;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// XML generation pipeline that outputs parsed Events
 pub struct XmlGenerationPipeline<M: TextGenerationModel> {
@@ -607,7 +607,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
         let messages = vec![crate::Message::user(prompt)];
         Ok(stream! {
-            let mut messages = messages;
 
             let stream = self
                 .message_completion_stream_with_tools(&messages[..])
@@ -632,7 +631,6 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
         }
 
         let initial_messages = messages.to_vec();
-        let parser = self.xml_parser.clone();
 
         Ok(stream! {
             let mut messages = initial_messages;

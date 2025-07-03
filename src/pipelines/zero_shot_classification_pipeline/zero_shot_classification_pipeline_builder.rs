@@ -1,6 +1,6 @@
 use super::zero_shot_classification_model::ZeroShotClassificationModel;
 use super::zero_shot_classification_pipeline::ZeroShotClassificationPipeline;
-use crate::pipelines::utils::model_cache::global_cache;
+use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
 
 pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel> {
     options: M::Options,
@@ -14,8 +14,9 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
     pub fn build(self) -> anyhow::Result<ZeroShotClassificationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
+        M::Options: ModelOptions + Clone,
     {
-        let key = format!("{:?}", self.options);
+        let key = self.options.cache_key();
         let model = global_cache().get_or_create(&key, || M::new(self.options.clone()))?;
         let tokenizer = M::get_tokenizer(self.options)?;
         Ok(ZeroShotClassificationPipeline { model, tokenizer })

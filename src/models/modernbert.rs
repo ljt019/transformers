@@ -633,6 +633,22 @@ pub enum ModernBertSize {
     Large,
 }
 
+impl std::fmt::Display for ModernBertSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ModernBertSize::Base => "modernbert-base",
+            ModernBertSize::Large => "modernbert-large",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// Fill-mask model using ModernBERT.
 #[derive(Clone)]
 pub struct FillMaskModernBertModel {

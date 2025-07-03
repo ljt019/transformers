@@ -607,6 +607,12 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
+impl crate::pipelines::utils::model_cache::ModelOptions for Gemma3Size {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
@@ -909,7 +915,6 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
 };
 
 use minijinja::{context, Environment};
-use serde_json::Value;
 
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {

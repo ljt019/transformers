@@ -1,11 +1,11 @@
 use crate::models::quantized_gemma3::{Gemma3Model, Gemma3Size};
 use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::model_cache::global_cache;
+use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
 
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_pipeline::TextGenerationPipeline;
 use super::xml_generation_pipeline::XmlGenerationPipeline;
-use super::xml_parser::{XmlParser, XmlParserBuilder};
+use super::xml_parser::XmlParserBuilder;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -77,11 +77,11 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
-        M::Options: std::fmt::Display,
+        M::Options: ModelOptions + Clone,
     {
         // Always use the global cache to share models
-        let cache_key = format!("{}", self.model_options);
-        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
+        let cache_key = self.model_options.cache_key();
+        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))?;
 
         // Start with model-specific defaults
         let default_params = model.default_generation_params();
@@ -104,11 +104,11 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
     pub fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
-        M::Options: std::fmt::Display,
+        M::Options: ModelOptions + Clone,
     {
         // Always use the global cache to share models
-        let cache_key = format!("{}", self.model_options);
-        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
+        let cache_key = self.model_options.cache_key();
+        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))?;
 
         // Start with model-specific defaults
         let default_params = model.default_generation_params();

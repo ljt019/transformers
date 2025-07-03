@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
 
     while let Some(tok) = stream.next().await {
-        print!("{}", tok);
+        print!("{}", tok?);
         std::io::stdout().flush().unwrap();
     }
 
