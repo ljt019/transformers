@@ -77,6 +77,16 @@ impl Event {
         Self::new(None, TagParts::Content, content)
     }
 
+    /// Create a new start event for top-level content
+    pub fn plain_start() -> Self {
+        Self::new(None, TagParts::Start, "")
+    }
+
+    /// Create a new end event for top-level content
+    pub fn plain_end() -> Self {
+        Self::new(None, TagParts::End, "")
+    }
+
     /// Create a new start event for a tag
     pub fn start(tag: Tag) -> Self {
         Self::new(Some(tag), TagParts::Start, "")
@@ -178,6 +188,8 @@ struct ParserState {
     /// For each open tag name we keep the number of characters that have already been
     /// emitted so we can stream incremental updates without duplication.
     emitted_tag_lens: std::collections::HashMap<String, usize>,
+    /// Whether we have started emitting top-level content
+    top_level_open: bool,
 }
 
 impl Default for ParserState {
@@ -189,6 +201,7 @@ impl Default for ParserState {
             in_tag: false,
             emitted_top_len: 0,
             emitted_tag_lens: std::collections::HashMap::new(),
+            top_level_open: false,
         }
     }
 }
@@ -267,6 +280,10 @@ impl XmlParser {
                     };
 
                     if !content_to_emit.is_empty() {
+                        if !state.top_level_open {
+                            events.push(Event::plain_start());
+                            state.top_level_open = true;
+                        }
                         events.push(Event::content(content_to_emit));
                     }
                     state.emitted_top_len = current_len;
@@ -401,7 +418,13 @@ impl XmlParser {
 
                         state.emitted_top_len = state.content_buffer.len();
                         if !content_to_emit.is_empty() {
+                            if !state.top_level_open {
+                                events.push(Event::plain_start());
+                                state.top_level_open = true;
+                            }
                             events.push(Event::content(content_to_emit));
+                            events.push(Event::plain_end());
+                            state.top_level_open = false;
                         }
                     }
 
@@ -471,9 +494,17 @@ impl XmlParser {
             };
 
             if !content_to_emit.is_empty() {
+                if !state.top_level_open {
+                    events.push(Event::plain_start());
+                    state.top_level_open = true;
+                }
                 events.push(Event::content(content_to_emit));
             }
         }
+        if state.top_level_open {
+            events.push(Event::plain_end());
+        }
+        state.top_level_open = false;
         state.content_buffer.clear();
         state.emitted_top_len = 0;
 
@@ -527,14 +558,19 @@ mod tests {
         let text = "<think>Hello world</think>Regular content";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 6);
         assert_eq!(events[0].part(), TagParts::Start);
         assert_eq!(events[0].tag_handle(), Some(&think_tag));
         assert_eq!(events[1].part(), TagParts::Content);
-        assert_eq!(events[1].get_content(), "Hello world");
+        assert_eq!(events[1].get_content(), "Hello world\n");
         assert_eq!(events[2].part(), TagParts::End);
         assert_eq!(events[2].tag_handle(), Some(&think_tag));
-        assert_eq!(events[3], Event::content("Regular content"));
+        assert_eq!(events[3].part(), TagParts::Start);
+        assert_eq!(events[3].tag_handle(), None);
+        assert_eq!(events[4].part(), TagParts::Content);
+        assert_eq!(events[4].get_content(), "Regular content");
+        assert_eq!(events[5].part(), TagParts::End);
+        assert_eq!(events[5].tag_handle(), None);
     }
 
     #[test]
@@ -552,7 +588,7 @@ mod tests {
         }
         all_events.extend(parser.flush());
 
-        assert_eq!(all_events.len(), 6);
+        assert_eq!(all_events.len(), 8);
         assert_eq!(all_events[0].part(), TagParts::Start);
         assert_eq!(all_events[0].tag_handle(), Some(&think_tag));
         assert_eq!(all_events[1].part(), TagParts::Content);
@@ -563,7 +599,12 @@ mod tests {
         assert_eq!(all_events[3].get_content(), "world");
         assert_eq!(all_events[4].part(), TagParts::End);
         assert_eq!(all_events[4].tag_handle(), Some(&think_tag));
-        assert_eq!(all_events[5], Event::content("Regular"));
+        assert_eq!(all_events[5].part(), TagParts::Start);
+        assert_eq!(all_events[5].tag_handle(), None);
+        assert_eq!(all_events[6].part(), TagParts::Content);
+        assert_eq!(all_events[6].get_content(), "Regular");
+        assert_eq!(all_events[7].part(), TagParts::End);
+        assert_eq!(all_events[7].tag_handle(), None);
     }
 
     #[test]
@@ -576,20 +617,25 @@ mod tests {
         let text = "<think>Thinking</think>Content<tool_response>Response</tool_response>";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 7);
+        assert_eq!(events.len(), 9);
         assert_eq!(events[0].tag_handle(), Some(&think_tag));
         assert_eq!(events[0].part(), TagParts::Start);
         assert_eq!(events[1].part(), TagParts::Content);
-        assert_eq!(events[1].get_content(), "Thinking");
+        assert_eq!(events[1].get_content(), "Thinking\n");
         assert_eq!(events[2].part(), TagParts::End);
         assert_eq!(events[2].tag_handle(), Some(&think_tag));
-        assert_eq!(events[3], Event::content("Content"));
-        assert_eq!(events[4].tag_handle(), Some(&tool_response_tag));
-        assert_eq!(events[4].part(), TagParts::Start);
-        assert_eq!(events[5].part(), TagParts::Content);
-        assert_eq!(events[5].get_content(), "Response");
-        assert_eq!(events[6].part(), TagParts::End);
+        assert_eq!(events[3].part(), TagParts::Start);
+        assert_eq!(events[3].tag_handle(), None);
+        assert_eq!(events[4].part(), TagParts::Content);
+        assert_eq!(events[4].get_content(), "Content");
+        assert_eq!(events[5].part(), TagParts::End);
+        assert_eq!(events[5].tag_handle(), None);
         assert_eq!(events[6].tag_handle(), Some(&tool_response_tag));
+        assert_eq!(events[6].part(), TagParts::Start);
+        assert_eq!(events[7].part(), TagParts::Content);
+        assert_eq!(events[7].get_content(), "Response\n");
+        assert_eq!(events[8].part(), TagParts::End);
+        assert_eq!(events[8].tag_handle(), Some(&tool_response_tag));
     }
 
     #[test]
@@ -601,14 +647,19 @@ mod tests {
         let text = "<think>Registered</think><other>Not registered</other>";
         let events = parser.parse_complete(text);
 
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 6);
         assert_eq!(events[0].part(), TagParts::Start);
         assert_eq!(events[0].tag_handle(), Some(&think_tag));
         assert_eq!(events[1].part(), TagParts::Content);
-        assert_eq!(events[1].get_content(), "Registered");
+        assert_eq!(events[1].get_content(), "Registered\n");
         assert_eq!(events[2].part(), TagParts::End);
         assert_eq!(events[2].tag_handle(), Some(&think_tag));
-        assert_eq!(events[3], Event::content("<other>Not registered</other>"));
+        assert_eq!(events[3].part(), TagParts::Start);
+        assert_eq!(events[3].tag_handle(), None);
+        assert_eq!(events[4].part(), TagParts::Content);
+        assert_eq!(events[4].get_content(), "<other>Not registered</other>");
+        assert_eq!(events[5].part(), TagParts::End);
+        assert_eq!(events[5].tag_handle(), None);
     }
 
     #[test]
@@ -624,7 +675,7 @@ mod tests {
         assert_eq!(events[0].part(), TagParts::Start);
         assert_eq!(events[0].tag_handle(), Some(&think_tag));
         assert_eq!(events[1].part(), TagParts::Content);
-        assert_eq!(events[1].get_content(), "Unclosed tag content");
+        assert_eq!(events[1].get_content(), "Unclosed tag content\n");
         assert_eq!(events[2].part(), TagParts::End);
         assert_eq!(events[2].tag_handle(), Some(&think_tag));
     }
