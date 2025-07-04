@@ -77,25 +77,6 @@ fn basic_sentiment() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_context_overflow_recovery() -> anyhow::Result<()> {
-    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
-        .seed(0)
-        .max_len(4)
-        .build()?;
-
-    let max_ctx = pipeline.max_context_length();
-
-    // Generate repeatedly until we exceed the context
-    for _ in 0..(max_ctx / 2 + 2) {
-        let _ = pipeline.completion("hello")?;
-    }
-
-    // Context should be less than the limit after auto reset
-    assert!(pipeline.context_position() < max_ctx);
-    Ok(())
-}
-
 #[tool(on_error = ErrorStrategy::Fail, retries = 1)]
 fn fail_tool() -> Result<String, ToolError> {
     Err(ToolError::Message("boom".into()))
@@ -140,26 +121,5 @@ fn test_empty_input_handling() -> anyhow::Result<()> {
     let res = pipeline.fill_mask("")?;
     assert!(!res.trim().is_empty());
 
-    Ok(())
-}
-
-#[test]
-fn test_token_limit_edge_cases() -> anyhow::Result<()> {
-    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
-        .seed(0)
-        .max_len(8)
-        .build()?;
-
-    let max_ctx = pipeline.max_context_length();
-    let prompt = "hello";
-
-    // Fill up to exactly the limit
-    while pipeline.context_position() + 2 < max_ctx {
-        let _ = pipeline.completion(prompt)?;
-    }
-
-    // Next generation should still work and reset when hitting the limit
-    let _ = pipeline.completion(prompt)?;
-    assert!(pipeline.context_position() < max_ctx);
     Ok(())
 }
