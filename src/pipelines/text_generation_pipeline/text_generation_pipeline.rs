@@ -350,133 +350,76 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         self.base.model.lock().unwrap().registered_tools()
     }
 
-    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        match input.into() {
-            Input::Prompt(p) => self.prompt_completion_with_tools(p),
-            Input::Messages(m) => self.message_completion_with_tools(m),
-        }
-    }
+    /// Execute a list of tool calls with retry logic and error handling
+    /// Returns a vector of formatted tool responses
+    fn execute_tool_calls(
+        &self,
+        tool_calls: Vec<ToolCallInvocation>,
+        tools: &[Tool],
+    ) -> anyhow::Result<Vec<String>> {
+        let mut tool_responses = Vec::new();
 
-    pub fn completion_stream_with_tools<'a>(
-        &'a self,
-        input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'a>,
-    > {
-        match input.into() {
-            Input::Prompt(p) => {
-                let stream = self.prompt_completion_stream_with_tools(p)?;
-                Ok(stream)
-            }
-            Input::Messages(m) => {
-                let stream = self.message_completion_stream_with_tools(m)?;
-                Ok(stream)
-            }
-        }
-    }
+        for call in tool_calls {
+            // Find the tool
+            let tool = tools
+                .iter()
+                .find(|t| t.name == call.name)
+                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
 
-    pub fn prompt_completion_with_tools(&self, prompt: &str) -> anyhow::Result<String> {
-        // Reset for new generation
-        self.base.context.lock().unwrap().reset();
+            // Execute the tool with retries
+            let args = call.arguments.clone();
+            let mut attempts = 0u32;
 
-        // Create messages with user prompt
-        let mut messages = vec![crate::Message::user(prompt)];
-
-        let tools = self.base.model.lock().unwrap().registered_tools();
-        if tools.is_empty() {
-            anyhow::bail!("No tools registered. Call register_tool() first.");
-        }
-
-        loop {
-            // Generate response
-            let templated = self
-                .base
-                .model
-                .lock()
-                .unwrap()
-                .apply_chat_template(&messages)?;
-            let tokens = self
-                .base
-                .model_tokenizer
-                .encode(templated, true)
-                .map_err(|e| anyhow::anyhow!(e))?
-                .get_ids()
-                .to_vec();
-
-            let response = self.base.completion_from_tokens(&tokens)?;
-
-            // Try to extract tool calls
-            match Self::extract_tool_calls(&response) {
-                Ok(tool_calls) if !tool_calls.is_empty() => {
-                    // Add assistant message with tool calls
-                    messages.push(crate::Message::assistant(&response));
-
-                    // Execute tools and collect responses
-                    let mut tool_responses = Vec::new();
-                    for call in tool_calls {
-                        // Find the tool
-                        let tool = tools
-                            .iter()
-                            .find(|t| t.name == call.name)
-                            .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
-
-                        // Execute the tool with retries
-                        let args = call.arguments.clone();
-                        let mut attempts = 0u32;
-                        loop {
-                            match tool.call(args.clone()) {
-                                Ok(result) => {
+            loop {
+                match tool.call(args.clone()) {
+                    Ok(result) => {
+                        // Ensure tool result content ends with exactly one newline
+                        let trimmed_result = result.trim_end_matches('\n');
+                        tool_responses.push(format!(
+                            "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                            call.name, trimmed_result
+                        ));
+                        break;
+                    }
+                    Err(e) => {
+                        attempts += 1;
+                        if attempts >= tool.max_retries() {
+                            match tool.error_strategy() {
+                                ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
+                                ErrorStrategy::ReturnToModel => {
+                                    // Also ensure error messages end with exactly one newline
+                                    let error_msg = format!("Error: {}", e);
+                                    let trimmed_error = error_msg.trim_end_matches('\n');
                                     tool_responses.push(format!(
-                                        "<tool_response>\n{}: {}\n</tool_response>",
-                                        call.name, result
+                                        "<tool_result name=\"{}\">\n{}\n</tool_result>",
+                                        call.name, trimmed_error
                                     ));
                                     break;
                                 }
-                                Err(e) => {
-                                    attempts += 1;
-                                    if attempts >= tool.max_retries() {
-                                        match tool.error_strategy() {
-                                            ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
-                                            ErrorStrategy::ReturnToModel => {
-                                                tool_responses.push(format!(
-                                                    "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                                    call.name, e
-                                                ));
-                                                break;
-                                            }
-                                        }
-                                    } else {
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                    }
-                                }
                             }
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
                         }
                     }
-
-                    // Add tool response message
-                    let tool_response_text = tool_responses.join("\n");
-                    messages.push(crate::Message::user(&tool_response_text));
-
-                    // Continue loop to generate final response
-                }
-                _ => {
-                    // No tool calls, return the response
-                    return Ok(response);
                 }
             }
         }
+
+        Ok(tool_responses)
     }
 
-    pub fn message_completion_with_tools(
-        &self,
-        messages: &[crate::Message],
-    ) -> anyhow::Result<String> {
+    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
         let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tool() first.");
         }
 
-        let mut messages = messages.to_vec();
+        let mut messages = match input.into() {
+            Input::Prompt(p) => vec![crate::Message::user(p)],
+            Input::Messages(m) => m.to_vec(),
+        };
+
+        let mut full_response = String::new();
 
         loop {
             // Generate response
@@ -498,156 +441,63 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             let max_seq_len = self.base.model.lock().unwrap().get_max_seq_len();
             let pending_tokens = new_tokens.len();
 
-            if self.base.context.lock().unwrap().position() + pending_tokens > max_seq_len {
-                self.base.context.lock().unwrap().reset();
-                self.base.last_processed_tokens.lock().unwrap().clear();
-            } else if self.base.can_reuse_cache(&new_tokens) {
-                let prefix_len = self.base.last_processed_tokens.lock().unwrap().len();
-                let new_portion = &new_tokens[prefix_len..];
-                let response = self.base.completion_from_tokens(new_portion)?;
+            let response =
+                if self.base.context.lock().unwrap().position() + pending_tokens > max_seq_len {
+                    self.base.context.lock().unwrap().reset();
+                    self.base.last_processed_tokens.lock().unwrap().clear();
+                    self.base.completion_from_tokens(&new_tokens)?
+                } else if self.base.can_reuse_cache(&new_tokens) {
+                    let prefix_len = self.base.last_processed_tokens.lock().unwrap().len();
+                    let new_portion = &new_tokens[prefix_len..];
+                    let res = self.base.completion_from_tokens(new_portion)?;
+                    *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+                    res
+                } else {
+                    self.base.context.lock().unwrap().reset();
+                    let res = self.base.completion_from_tokens(&new_tokens)?;
+                    *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+                    res
+                };
 
-                *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
-
-                // Check for tool calls
-                match Self::extract_tool_calls(&response) {
-                    Ok(tool_calls) if !tool_calls.is_empty() => {
-                        messages.push(crate::Message::assistant(&response));
-
-                        let mut tool_responses = Vec::new();
-                        for call in tool_calls {
-                            let tool = tools
-                                .iter()
-                                .find(|t| t.name == call.name)
-                                .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
-
-                        let args = call.arguments.clone();
-                        let mut attempts = 0u32;
-                        loop {
-                            match tool.call(args.clone()) {
-                                    Ok(result) => {
-                                        tool_responses.push(format!(
-                                            "<tool_response>\n{}: {}\n</tool_response>",
-                                            call.name, result
-                                        ));
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        attempts += 1;
-                                        if attempts >= tool.max_retries() {
-                                            match tool.error_strategy() {
-                                                ErrorStrategy::Fail => {
-                                                    return Err(anyhow::anyhow!(e))
-                                                }
-                                                ErrorStrategy::ReturnToModel => {
-                                                    tool_responses.push(format!(
-                                                        "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                                        call.name, e
-                                                    ));
-                                                    break;
-                                                }
-                                            }
-                                        } else {
-                                            std::thread::sleep(std::time::Duration::from_millis(50));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        let tool_response_text = tool_responses.join("\n");
-                        messages.push(crate::Message::user(&tool_response_text));
-                        continue;
-                    }
-                    _ => return Ok(response),
-                }
-            } else {
-                self.base.context.lock().unwrap().reset();
-            }
-
-            let response = self.base.completion_from_tokens(&new_tokens)?;
-            *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
-
+            // Check for tool calls
             match Self::extract_tool_calls(&response) {
                 Ok(tool_calls) if !tool_calls.is_empty() => {
+                    // Append the model's response (including tool calls)
+                    full_response.push_str(&response);
+                    full_response.push('\n');
                     messages.push(crate::Message::assistant(&response));
 
-                    let mut tool_responses = Vec::new();
-                    for call in tool_calls {
-                        let tool = tools
-                            .iter()
-                            .find(|t| t.name == call.name)
-                            .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", call.name))?;
-
-                        let args = call.arguments.clone();
-                        let mut attempts = 0u32;
-                        loop {
-                            match tool.call(args.clone()) {
-                                Ok(result) => {
-                                    tool_responses.push(format!(
-                                        "<tool_response>\n{}: {}\n</tool_response>",
-                                        call.name, result
-                                    ));
-                                    break;
-                                }
-                                Err(e) => {
-                                    attempts += 1;
-                                    if attempts >= tool.max_retries() {
-                                        match tool.error_strategy() {
-                                            ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
-                                            ErrorStrategy::ReturnToModel => {
-                                                tool_responses.push(format!(
-                                                    "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                                    call.name, e
-                                                ));
-                                                break;
-                                            }
-                                        }
-                                    } else {
-                                        std::thread::sleep(std::time::Duration::from_millis(50));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
+                    // Execute tools and get responses
+                    let tool_responses = self.execute_tool_calls(tool_calls, &tools)?;
                     let tool_response_text = tool_responses.join("\n");
+
+                    // Append tool results to the output
+                    full_response.push('\n');
+                    full_response.push_str(&tool_response_text);
+                    full_response.push('\n');
+
                     messages.push(crate::Message::user(&tool_response_text));
+                    continue;
                 }
-                _ => return Ok(response),
+                _ => {
+                    // No tool calls, append final response and return
+                    if !full_response.is_empty() {
+                        full_response.push('\n');
+                        full_response.push_str(&response);
+                        return Ok(full_response);
+                    } else {
+                        return Ok(response);
+                    }
+                }
             }
         }
     }
 
-    pub fn prompt_completion_stream_with_tools(
-        &self,
-        prompt: &str,
+    pub fn completion_stream_with_tools<'a>(
+        &'a self,
+        input: impl Into<Input<'a>>,
     ) -> anyhow::Result<
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'_>,
-    > {
-        use async_stream::try_stream;
-        use futures::StreamExt;
-
-        let messages = vec![crate::Message::user(prompt)];
-        let out_stream = try_stream! {
-            let stream = self
-                .message_completion_stream_with_tools(&messages[..])?;
-            futures::pin_mut!(stream);
-            while let Some(chunk) = stream.next().await {
-                yield chunk?;
-            }
-        };
-        Ok(
-            crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
-                Box::pin(out_stream),
-            ),
-        )
-    }
-
-    pub fn message_completion_stream_with_tools(
-        &self,
-        messages: &[crate::Message],
-    ) -> anyhow::Result<
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'_>,
+        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'a>,
     > {
         use async_stream::try_stream;
         use futures::StreamExt;
@@ -657,17 +507,26 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             anyhow::bail!("No tools registered. Call register_tool() first.");
         }
 
-        let initial_messages = messages.to_vec();
+        let initial_messages = match input.into() {
+            Input::Prompt(p) => vec![crate::Message::user(p)],
+            Input::Messages(m) => m.to_vec(),
+        };
 
         let out_stream = try_stream! {
             let mut messages = initial_messages;
             let mut response_buffer = String::new();
+            let mut needs_spacing = false;
 
             loop {
+                // Add spacing before final response if needed
+                if needs_spacing {
+                    yield "\n".to_string();
+                    needs_spacing = false;
+                }
+
                 // Stream the response
                 {
-                    let stream_inner = self
-                        .completion_stream(&messages[..])?;
+                    let stream_inner = self.completion_stream(&messages[..])?;
                     futures::pin_mut!(stream_inner);
 
                     while let Some(chunk_res) = stream_inner.next().await {
@@ -685,58 +544,14 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                         response_buffer.clear();
 
                         // Execute tools
-                        let mut tool_responses = Vec::new();
-                        for call in tool_calls {
-                            let tool = tools
-                                .iter()
-                                .find(|t| t.name == call.name);
-
-                            match tool {
-                                Some(tool) => {
-                                    let args = call.arguments.clone();
-                                    let mut attempts = 0u32;
-                                    loop {
-                                        match tool.call(args.clone()) {
-                                            Ok(result) => {
-                                                tool_responses.push(format!(
-                                                    "<tool_response>\n{}: {}\n</tool_response>",
-                                                    call.name, result
-                                                ));
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                attempts += 1;
-                                                if attempts >= tool.max_retries() {
-                                                    match tool.error_strategy() {
-                                                        ErrorStrategy::Fail => {
-                                                            Err(anyhow::anyhow!(e))?;
-                                                        }
-                                                        ErrorStrategy::ReturnToModel => {
-                                                            tool_responses.push(format!(
-                                                                "<tool_response>\n{}: Error: {}\n</tool_response>",
-                                                                call.name, e
-                                                            ));
-                                                            break;
-                                                        }
-                                                    }
-                                                } else {
-                                                    std::thread::sleep(std::time::Duration::from_millis(50));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                None => {
-                                    tool_responses.push(format!(
-                                        "<tool_response>\n{}: Error: Tool not found\n</tool_response>",
-                                        call.name
-                                    ));
-                                }
-                            }
-                        }
-
+                        let tool_responses = self.execute_tool_calls(tool_calls, &tools)?;
                         let tool_response_text = tool_responses.join("\n");
+
+                                                // Yield the tool results to the stream
+                        yield format!("\n\n{}\n", tool_response_text);
+
                         messages.push(crate::Message::user(&tool_response_text));
+                        needs_spacing = true;
 
                         // Continue to get the final response
                     }
@@ -755,11 +570,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     }
 
     fn extract_tool_calls(text: &str) -> anyhow::Result<Vec<ToolCallInvocation>> {
-        let tool_regex = Regex::new(r"<tool_call>(.*?)</tool_call>")?;
+        let tool_regex = Regex::new(r"(?s)<tool_call>(.*?)</tool_call>")?;
         let mut tool_calls = Vec::new();
 
         for cap in tool_regex.captures_iter(text) {
-            let json_str = cap.get(1).unwrap().as_str();
+            let json_str = cap.get(1).unwrap().as_str().trim();
             match serde_json::from_str::<RawToolCall>(json_str) {
                 Ok(raw_call) => {
                     tool_calls.push(ToolCallInvocation {

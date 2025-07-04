@@ -13,19 +13,23 @@ fn calculate_average_speed(
     ))
 }
 
+#[tool]
+/// Gets the current weather in a given city
+fn get_weather(city: String) -> Result<String, ToolError> {
+    Ok(format!("The weather in {} is sunny.", city))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Build a pipeline with XML parsing capabilities
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
-        .build_xml(&["think", "tool_response"])?;
+        .build_xml(&["think", "tool_result", "tool_call"])?;
 
-    pipeline.register_tools(tools![calculate_average_speed])?;
+    pipeline.register_tools(tools![get_weather])?;
 
     // Stream completion - this will yield Event items
-    let mut stream = pipeline.completion_stream_with_tools(
-        "Think through this problem: If a train travels 60 miles in 1.5 hours, what is its average speed?"
-    )?;
+    let mut stream = pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
 
     println!("\n--- Streaming Events ---");
 
@@ -34,16 +38,25 @@ async fn main() -> Result<()> {
             Some("think") => match event.part() {
                 TagParts::Start => println!("[THINKING]"),
                 TagParts::Content => print!("{}", event.get_content()),
-                TagParts::End => println!(),
+                TagParts::End => println!("[DONE THINKING]\n"),
             },
-            Some("tool_response") => match event.part() {
-                TagParts::Start => print!("[TOOL] "),
+            Some("tool_result") => match event.part() {
+                TagParts::Start => println!("[START TOOL RESULT]"),
                 TagParts::Content => print!("{}", event.get_content()),
-                TagParts::End => println!(),
+                TagParts::End => println!("[END TOOL RESULT]\n"),
             },
-            _ => if event.part() == TagParts::Content {
-                print!("{}", event.get_content());
+            Some("tool_call") => match event.part() {
+                TagParts::Start => println!("[TOOL CALL]"),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!("[END TOOL CALL]\n"),
             },
+            _ => {
+                if event.part() == TagParts::Content {
+                    println!("[OUTPUT]");
+                    print!("{}", event.get_content());
+                    println!("[END OUTPUT]");
+                }
+            }
         }
         std::io::stdout().flush().unwrap();
     }

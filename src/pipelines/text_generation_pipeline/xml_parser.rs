@@ -252,24 +252,55 @@ impl XmlParser {
                 // Outside of any registered tag.
                 let current_len = state.content_buffer.len();
                 if current_len > state.emitted_top_len {
-                    let new_slice = state.content_buffer[state.emitted_top_len..].to_string();
-                    events.push(Event::content(new_slice));
+                    let mut new_slice = &state.content_buffer[state.emitted_top_len..];
+
+                    // If this is the very first top-level content emission, strip leading newlines.
+                    if state.emitted_top_len == 0 {
+                        new_slice = new_slice.trim_start_matches('\n');
+                    }
+
+                    // Skip emitting if it is now empty or just whitespace/newlines.
+                    let content_to_emit = if new_slice.trim().is_empty() {
+                        "".to_string()
+                    } else {
+                        new_slice.to_string()
+                    };
+
+                    if !content_to_emit.is_empty() {
+                        events.push(Event::content(content_to_emit));
+                    }
                     state.emitted_top_len = current_len;
                 }
             } else {
                 // Inside the innermost registered tag → stream its delta.
                 if let Some((tag_name_ref, content_ref)) = state.open_tags.last() {
                     let tag_name = tag_name_ref.clone();
-                    let total_len = content_ref.len();
+                    let content = content_ref.clone();
+                    let total_len = content.len();
 
                     let already_emitted = *state.emitted_tag_lens.get(&tag_name).unwrap_or(&0);
 
                     if total_len > already_emitted {
-                        let new_slice = content_ref[already_emitted..].to_string();
-                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                            events.push(Event::tagged_internal(tag_handle.clone(), new_slice));
+                        let new_slice = &content[already_emitted..];
+
+                        // Strip leading newlines from the first emission of tag content
+                        if already_emitted == 0 {
+                            let trimmed = new_slice.trim_start_matches('\n');
+                            if !trimmed.is_empty() {
+                                if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                                    events
+                                        .push(Event::tagged_internal(tag_handle.clone(), trimmed));
+                                }
+                            }
+                            // Update emitted length to account for any trimmed newlines
+                            state.emitted_tag_lens.insert(tag_name.clone(), total_len);
+                        } else {
+                            // Not the first emission, emit as-is
+                            if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                                events.push(Event::tagged_internal(tag_handle.clone(), new_slice));
+                            }
+                            state.emitted_tag_lens.insert(tag_name.clone(), total_len);
                         }
-                        state.emitted_tag_lens.insert(tag_name, total_len);
                     }
                 }
             }
@@ -331,19 +362,47 @@ impl XmlParser {
 
                         if let Some(tag_handle) = self.tag_map.get(&tag_name) {
                             if content.len() > already_emitted {
-                                events.push(Event::tagged_internal(
-                                    tag_handle.clone(),
-                                    content[already_emitted..].to_string(),
-                                ));
+                                let remaining_content = &content[already_emitted..];
+                                // Strip leading newlines if this is the first content emission
+                                let mut content_to_emit = if already_emitted == 0 {
+                                    remaining_content.trim_start_matches('\n')
+                                } else {
+                                    remaining_content
+                                };
+
+                                // Also strip trailing newlines from the final emission
+                                let trimmed = content_to_emit.trim_end_matches('\n');
+                                if !trimmed.is_empty() {
+                                    let mut final_str = trimmed.to_string();
+                                    final_str.push('\n'); // ensure exactly one trailing newline
+                                    events.push(Event::tagged_internal(
+                                        tag_handle.clone(),
+                                        final_str,
+                                    ));
+                                }
                             }
                             events.push(Event::end(tag_handle.clone()));
                         }
                     }
                 } else if !tag_content.ends_with("/>") {
                     if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
-                        let content = state.content_buffer[state.emitted_top_len..].to_string();
+                        let content = &state.content_buffer[state.emitted_top_len..];
+
+                        // Normalize whitespace before tag start
+                        let mut slice = content;
+                        if state.emitted_top_len == 0 {
+                            slice = slice.trim_start_matches('\n');
+                        }
+                        let content_to_emit = if slice.trim().is_empty() {
+                            String::new()
+                        } else {
+                            slice.to_string()
+                        };
+
                         state.emitted_top_len = state.content_buffer.len();
-                        events.push(Event::content(content));
+                        if !content_to_emit.is_empty() {
+                            events.push(Event::content(content_to_emit));
+                        }
                     }
 
                     state.open_tags.push((tag_name.clone(), String::new()));
@@ -400,9 +459,20 @@ impl XmlParser {
 
         // Emit any remaining content
         if state.content_buffer.len() > state.emitted_top_len {
-            events.push(Event::content(
-                state.content_buffer[state.emitted_top_len..].to_string(),
-            ));
+            let remaining = &state.content_buffer[state.emitted_top_len..];
+
+            // Always trim leading and trailing newlines from final content
+            let slice = remaining.trim_start_matches('\n').trim_end_matches('\n');
+
+            let content_to_emit = if slice.trim().is_empty() {
+                String::new()
+            } else {
+                slice.to_string()
+            };
+
+            if !content_to_emit.is_empty() {
+                events.push(Event::content(content_to_emit));
+            }
         }
         state.content_buffer.clear();
         state.emitted_top_len = 0;
@@ -415,10 +485,21 @@ impl XmlParser {
 
             if let Some(tag_handle) = self.tag_map.get(&tag_name) {
                 if content.len() > already_emitted {
-                    events.push(Event::tagged_internal(
-                        tag_handle.clone(),
-                        content[already_emitted..].to_string(),
-                    ));
+                    let remaining_content = &content[already_emitted..];
+                    // Strip leading newlines if this is the first content emission
+                    let mut content_to_emit = if already_emitted == 0 {
+                        remaining_content.trim_start_matches('\n')
+                    } else {
+                        remaining_content
+                    };
+
+                    // Also strip trailing newlines from the final emission
+                    let trimmed = content_to_emit.trim_end_matches('\n');
+                    if !trimmed.is_empty() {
+                        let mut final_str = trimmed.to_string();
+                        final_str.push('\n'); // ensure exactly one trailing newline
+                        events.push(Event::tagged_internal(tag_handle.clone(), final_str));
+                    }
                 }
                 events.push(Event::end(tag_handle.clone()));
             }

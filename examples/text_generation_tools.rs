@@ -21,6 +21,7 @@ fn get_temperature(city: String) -> Result<String, ToolError> {
     ));
 }
 
+/*
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Building pipeline...");
@@ -34,12 +35,32 @@ async fn main() -> Result<()> {
     pipeline.register_tools(tools![get_temperature, get_humidity])?;
 
     let mut stream =
-        pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
+        pipeline.completion_stream_with_tools("What's the temp and humidity like in Tokyo?")?;
 
     while let Some(tok) = stream.next().await {
         print!("{}", tok?);
         std::io::stdout().flush().unwrap();
     }
+
+    Ok(())
+}
+*/
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("Building pipeline...");
+
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .max_len(8192)
+        .build()?;
+
+    println!("Pipeline built successfully.");
+
+    pipeline.register_tools(tools![get_temperature, get_humidity])?;
+
+    let response = pipeline.completion_with_tools("What's the temp and humidity like in Tokyo?")?;
+
+    println!("{}", response);
 
     Ok(())
 }
