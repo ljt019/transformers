@@ -50,13 +50,11 @@ async fn main() -> Result<()> {
                 TagParts::Content => print!("{}", event.get_content()),
                 TagParts::End => println!("[END TOOL CALL]\n"),
             },
-            _ => {
-                if event.part() == TagParts::Content {
-                    println!("[OUTPUT]");
-                    print!("{}", event.get_content());
-                    println!("[END OUTPUT]");
-                }
-            }
+            _ => match event.part() {
+                TagParts::Start => println!("[OUTPUT]"),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!("[END OUTPUT]"),
+            },
         }
         std::io::stdout().flush().unwrap();
     }
