@@ -190,6 +190,8 @@ struct ParserState {
     emitted_tag_lens: std::collections::HashMap<String, usize>,
     /// Whether we have started emitting top-level content
     top_level_open: bool,
+    /// Whether the last emitted top-level content ended with a newline
+    last_content_had_newline: bool,
 }
 
 impl Default for ParserState {
@@ -202,6 +204,7 @@ impl Default for ParserState {
             emitted_top_len: 0,
             emitted_tag_lens: std::collections::HashMap::new(),
             top_level_open: false,
+            last_content_had_newline: false,
         }
     }
 }
@@ -284,7 +287,8 @@ impl XmlParser {
                             events.push(Event::plain_start());
                             state.top_level_open = true;
                         }
-                        events.push(Event::content(content_to_emit));
+                        events.push(Event::content(content_to_emit.clone()));
+                        state.last_content_had_newline = content_to_emit.ends_with('\n');
                     }
                     state.emitted_top_len = current_len;
                 }
@@ -413,7 +417,12 @@ impl XmlParser {
                         let content_to_emit = if slice.trim().is_empty() {
                             String::new()
                         } else {
-                            slice.to_string()
+                            // Ensure top-level content ends with exactly one newline
+                            let mut content_str = slice.to_string();
+                            if !content_str.ends_with('\n') {
+                                content_str.push('\n');
+                            }
+                            content_str
                         };
 
                         state.emitted_top_len = state.content_buffer.len();
@@ -422,9 +431,8 @@ impl XmlParser {
                                 events.push(Event::plain_start());
                                 state.top_level_open = true;
                             }
-                            events.push(Event::content(content_to_emit));
-                            events.push(Event::plain_end());
-                            state.top_level_open = false;
+                            events.push(Event::content(content_to_emit.clone()));
+                            state.last_content_had_newline = content_to_emit.ends_with('\n');
                         }
                     }
 
@@ -490,18 +498,29 @@ impl XmlParser {
             let content_to_emit = if slice.trim().is_empty() {
                 String::new()
             } else {
-                slice.to_string()
+                // Ensure top-level content ends with exactly one newline
+                let mut content_str = slice.to_string();
+                if !content_str.ends_with('\n') {
+                    content_str.push('\n');
+                }
+                content_str
             };
 
+            state.emitted_top_len = state.content_buffer.len();
             if !content_to_emit.is_empty() {
                 if !state.top_level_open {
                     events.push(Event::plain_start());
                     state.top_level_open = true;
                 }
-                events.push(Event::content(content_to_emit));
+                events.push(Event::content(content_to_emit.clone()));
+                state.last_content_had_newline = content_to_emit.ends_with('\n');
             }
         }
         if state.top_level_open {
+            // For streaming case: add a trailing newline if the last content didn't have one
+            if !state.last_content_had_newline {
+                events.push(Event::content("\n"));
+            }
             events.push(Event::plain_end());
         }
         state.top_level_open = false;
@@ -568,7 +587,7 @@ mod tests {
         assert_eq!(events[3].part(), TagParts::Start);
         assert_eq!(events[3].tag_handle(), None);
         assert_eq!(events[4].part(), TagParts::Content);
-        assert_eq!(events[4].get_content(), "Regular content");
+        assert_eq!(events[4].get_content(), "Regular content\n");
         assert_eq!(events[5].part(), TagParts::End);
         assert_eq!(events[5].tag_handle(), None);
     }
@@ -602,7 +621,7 @@ mod tests {
         assert_eq!(all_events[5].part(), TagParts::Start);
         assert_eq!(all_events[5].tag_handle(), None);
         assert_eq!(all_events[6].part(), TagParts::Content);
-        assert_eq!(all_events[6].get_content(), "Regular");
+        assert_eq!(all_events[6].get_content(), "Regular\n");
         assert_eq!(all_events[7].part(), TagParts::End);
         assert_eq!(all_events[7].tag_handle(), None);
     }
@@ -627,7 +646,7 @@ mod tests {
         assert_eq!(events[3].part(), TagParts::Start);
         assert_eq!(events[3].tag_handle(), None);
         assert_eq!(events[4].part(), TagParts::Content);
-        assert_eq!(events[4].get_content(), "Content");
+        assert_eq!(events[4].get_content(), "Content\n");
         assert_eq!(events[5].part(), TagParts::End);
         assert_eq!(events[5].tag_handle(), None);
         assert_eq!(events[6].tag_handle(), Some(&tool_response_tag));
@@ -657,7 +676,7 @@ mod tests {
         assert_eq!(events[3].part(), TagParts::Start);
         assert_eq!(events[3].tag_handle(), None);
         assert_eq!(events[4].part(), TagParts::Content);
-        assert_eq!(events[4].get_content(), "<other>Not registered</other>");
+        assert_eq!(events[4].get_content(), "<other>Not registered</other>\n");
         assert_eq!(events[5].part(), TagParts::End);
         assert_eq!(events[5].tag_handle(), None);
     }

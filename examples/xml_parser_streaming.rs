@@ -53,13 +53,11 @@ async fn main() -> Result<()> {
             _ => match event.part() {
                 TagParts::Start => println!("[OUTPUT]"),
                 TagParts::Content => print!("{}", event.get_content()),
-                TagParts::End => println!("[END OUTPUT]"),
+                TagParts::End => println!("[END OUTPUT]\n"),
             },
         }
         std::io::stdout().flush().unwrap();
     }
-
-    println!();
 
     Ok(())
 }
