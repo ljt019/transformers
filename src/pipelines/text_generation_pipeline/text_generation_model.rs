@@ -37,6 +37,9 @@ pub trait LanguageModelContext: Send {
     fn can_continue_from(&self, position: usize) -> bool;
 }
 
+use async_trait::async_trait;
+
+#[async_trait]
 pub trait TextGenerationModel {
     /// Type used to configure model loading (e.g. which checkpoint size).
     type Options;
@@ -45,9 +48,11 @@ pub trait TextGenerationModel {
     /// so that asynchronous streams capturing it can be moved across threads.
     type Context: LanguageModelContext + Send;
 
-    fn new(options: Self::Options) -> Self;
+    async fn new(options: Self::Options) -> anyhow::Result<Self>
+    where
+        Self: Sized;
 
-    fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
+    async fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer>;
 
     fn apply_chat_template(&self, messages: &[Message]) -> anyhow::Result<String>;
 

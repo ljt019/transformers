@@ -10,27 +10,6 @@ pub use quantized_nn::RmsNorm;
 use candle_core::{Result, Tensor};
 use candle_nn::Module;
 
-pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
-    let device = logits.device();
-    let mut logits = logits.to_dtype(candle_core::DType::F32)?.to_vec1::<f32>()?;
-    let mut already_seen = std::collections::HashSet::new();
-    for token_id in context {
-        if already_seen.contains(token_id) {
-            continue;
-        }
-        already_seen.insert(token_id);
-        if let Some(logit) = logits.get_mut(*token_id as usize) {
-            if *logit >= 0. {
-                *logit /= penalty
-            } else {
-                *logit *= penalty
-            }
-        }
-    }
-    let logits_len = logits.len();
-    Tensor::from_vec(logits, logits_len, device)
-}
-
 /// Repeats a key or value tensor for grouped query attention
 /// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
 pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {

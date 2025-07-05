@@ -20,12 +20,12 @@ pub struct BasePipeline<M: TextGenerationModel> {
 }
 
 impl<M: TextGenerationModel> BasePipeline<M> {
-    pub fn new(
+    pub async fn new(
         model: M,
         gen_params: GenerationParams,
         device: candle_core::Device,
     ) -> anyhow::Result<Self> {
-        let model_tokenizer = model.get_tokenizer()?;
+        let model_tokenizer = model.get_tokenizer().await?;
         let context = model.new_context();
 
         // Collect textual forms of special tokens for display filtering

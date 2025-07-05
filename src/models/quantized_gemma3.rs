@@ -627,12 +627,12 @@ pub struct Gemma3Model {
 
 impl Gemma3Model {
     /// Load and prepare the chat template environment
-    fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
+    async fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
         let tokenizer_config_loader =
             crate::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
-        let tokenizer_config_path = tokenizer_config_loader.load()?;
+        let tokenizer_config_path = tokenizer_config_loader.load().await?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
         let config_json: serde_json::Value = serde_json::from_str(&tokenizer_config_content)?;
 
@@ -650,15 +650,19 @@ impl Gemma3Model {
         Ok(Arc::new(env))
     }
     /// Load a Gemma3 model from a GGUF file.
-    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> anyhow::Result<Self> {
+    pub async fn from_gguf<R: Read + Seek>(
+        reader: &mut R,
+        device: &Device,
+    ) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
         let generation_config = crate::loaders::GenerationConfigLoader::new(
             "google/gemma-3-1b-it",
             "generation_config.json",
         )
-        .load()?;
-        let chat_template_env = Self::load_chat_template_env()?;
+        .load()
+        .await?;
+        let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
             generation_config,
@@ -667,20 +671,21 @@ impl Gemma3Model {
     }
 
     /// Load the model from hf
-    pub fn from_hf(device: &Device, size: Gemma3Size) -> anyhow::Result<Self> {
+    pub async fn from_hf(device: &Device, size: Gemma3Size) -> anyhow::Result<Self> {
         let (repo_id, file_name) = size.to_id();
 
         // Download the model from hf
         let model_loader = GgufModelLoader::new(&repo_id, &file_name);
-        let (mut file, content) = model_loader.load()?;
+        let (mut file, content) = model_loader.load().await?;
 
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
         let generation_config = crate::loaders::GenerationConfigLoader::new(
             "google/gemma-3-1b-it",
             "generation_config.json",
         )
-        .load()?;
-        let chat_template_env = Self::load_chat_template_env()?;
+        .load()
+        .await?;
+        let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
             generation_config,
@@ -689,9 +694,10 @@ impl Gemma3Model {
     }
 
     /// Get the models suggested tokenizer
-    pub fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
-        let tokenizer = tokenizer_loader.load()?;
+    pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        let tokenizer_loader =
+            TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
+        let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
 
@@ -913,6 +919,7 @@ Pipeline stuff
 use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel,
 };
+use async_trait::async_trait;
 
 use minijinja::{context, Environment};
 
@@ -936,16 +943,17 @@ impl LanguageModelContext for Context {
     }
 }
 
+#[async_trait]
 impl TextGenerationModel for Gemma3Model {
     type Options = Gemma3Size;
     type Context = crate::models::quantized_gemma3::Context;
 
-    fn new(options: Self::Options) -> Self {
-        Gemma3Model::from_hf(&candle_core::Device::Cpu, options).unwrap()
+    async fn new(options: Self::Options) -> anyhow::Result<Self> {
+        Gemma3Model::from_hf(&candle_core::Device::Cpu, options).await
     }
 
-    fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        Gemma3Model::get_tokenizer(self)
+    async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        Gemma3Model::get_tokenizer(self).await
     }
 
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {

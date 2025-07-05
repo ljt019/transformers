@@ -565,12 +565,12 @@ pub struct Qwen3Model {
 
 impl Qwen3Model {
     /// Load and prepare the chat template environment
-    fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
+    async fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
         let tokenizer_config_loader =
             crate::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
-        let tokenizer_config_path = tokenizer_config_loader.load()?;
+        let tokenizer_config_path = tokenizer_config_loader.load().await?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
         let config_json: serde_json::Value = serde_json::from_str(&tokenizer_config_content)?;
 
@@ -610,15 +610,19 @@ impl Qwen3Model {
         Ok(Arc::new(env))
     }
     /// Load a Qwen3 model from a GGUF file.
-    pub fn from_gguf<R: Read + Seek>(reader: &mut R, device: &Device) -> anyhow::Result<Self> {
+    pub async fn from_gguf<R: Read + Seek>(
+        reader: &mut R,
+        device: &Device,
+    ) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
         let generation_config = crate::loaders::GenerationConfigLoader::new(
             "Qwen/Qwen3-0.6B",
             "generation_config.json",
         )
-        .load()?;
-        let chat_template_env = Self::load_chat_template_env()?;
+        .load()
+        .await?;
+        let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
             reasoning: true,
@@ -629,22 +633,23 @@ impl Qwen3Model {
     }
 
     /// Load the model from hf
-    pub fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
+    pub async fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
         let (repo_id, file_name) = size.to_id();
 
         // Download the model from hf
         let model_loader = GgufModelLoader::new(&repo_id, &file_name);
-        let (mut file, content) = model_loader.load()?;
+        let (mut file, content) = model_loader.load().await?;
 
         // Download the tokenizer config from hf to get the eos token id
         let generation_config = crate::loaders::GenerationConfigLoader::new(
             "Qwen/Qwen3-0.6B",
             "generation_config.json",
         )
-        .load()?;
+        .load()
+        .await?;
 
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
-        let chat_template_env = Self::load_chat_template_env()?;
+        let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
             reasoning: true,
@@ -655,9 +660,10 @@ impl Qwen3Model {
     }
 
     /// Get the models suggested tokenizer
-    pub fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
-        let tokenizer = tokenizer_loader.load()?;
+    pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        let tokenizer_loader =
+            TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
 
@@ -843,6 +849,7 @@ impl LanguageModelContext for Context {
     }
 }
 
+#[async_trait]
 impl TextGenerationModel for Qwen3Model {
     type Context = crate::models::quantized_qwen3::Context;
     type Options = Qwen3Size;
@@ -865,12 +872,12 @@ impl TextGenerationModel for Qwen3Model {
         self.weights.max_seq_len
     }
 
-    fn new(options: Self::Options) -> Self {
-        Qwen3Model::from_hf(&candle_core::Device::Cpu, options).unwrap()
+    async fn new(options: Self::Options) -> anyhow::Result<Self> {
+        Qwen3Model::from_hf(&candle_core::Device::Cpu, options).await
     }
 
-    fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        Qwen3Model::get_tokenizer(self)
+    async fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
+        Qwen3Model::get_tokenizer(self).await
     }
 
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
@@ -951,6 +958,7 @@ impl ToggleableReasoning for Qwen3Model {
 
 use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
 use crate::pipelines::text_generation_pipeline::tool_error::ToolError;
+use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {
     fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {

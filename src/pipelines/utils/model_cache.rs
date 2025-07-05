@@ -75,6 +75,34 @@ impl ModelCache {
         Ok(model)
     }
 
+    pub async fn get_or_create_async<M, Fut, F>(&self, key: &str, loader: F) -> anyhow::Result<M>
+    where
+        M: Clone + Send + Sync + 'static,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<M>>,
+    {
+        let type_id = TypeId::of::<M>();
+        let cache_key = (type_id, key.to_string());
+
+        {
+            let cache = self.cache.lock().await;
+            if let Some(cached) = cache.get(&cache_key) {
+                if let Some(model) = cached.downcast_ref::<M>() {
+                    return Ok(model.clone());
+                }
+            }
+        }
+
+        let model = loader().await?;
+
+        {
+            let mut cache = self.cache.lock().await;
+            cache.insert(cache_key, Arc::new(model.clone()) as Arc<dyn Any + Send + Sync>);
+        }
+
+        Ok(model)
+    }
+
     /// Clear all cached models.
     pub async fn clear(&self) {
         let mut cache = self.cache.lock().await;
