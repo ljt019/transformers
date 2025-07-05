@@ -39,15 +39,6 @@ Transformers provides a simple, intuitive interface for Rust developers who want
 
 All ModernBERT-based pipelines share the same backbone architecture while loading task-specific finetuned checkpoints.
 
-## Pipeline Feature Matrix
-
-| Pipeline | Models | Streaming | Tools | Context Management |
-|----------|--------|-----------|-------|--------------------|
-| Text Generation | Qwen3, Gemma3 | ✓ | ✓ | ✓ |
-| Sentiment | ModernBERT | ✗ | ✗ | ✗ |
-| Fill Mask | ModernBERT | ✗ | ✗ | ✗ |
-| Zero-Shot | ModernBERT | ✗ | ✗ | ✗ |
-
 ## Usage
 
 At this point in development the only way to interact with the models is through the given pipelines, I plan to eventually provide a simple interface to work with the models directly.
