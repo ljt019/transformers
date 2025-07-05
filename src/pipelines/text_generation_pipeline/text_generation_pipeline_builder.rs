@@ -1,11 +1,13 @@
 use crate::models::quantized_gemma3::{Gemma3Model, Gemma3Size};
 use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
 use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::pipelines::utils::load_device_with;
 
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_pipeline::TextGenerationPipeline;
 use super::xml_generation_pipeline::XmlGenerationPipeline;
 use super::xml_parser::XmlParserBuilder;
+use candle_core::{CudaDevice, Device};
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -17,6 +19,14 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     top_p: Option<f64>,
     top_k: Option<usize>,
     min_p: Option<f64>,
+    device_request: DeviceRequest,
+}
+
+enum DeviceRequest {
+    Default,
+    Cpu,
+    Cuda(usize),
+    Explicit(Device),
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
@@ -31,6 +41,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             top_p: None,
             top_k: None,
             min_p: None,
+            device_request: DeviceRequest::Default,
         }
     }
 
@@ -74,6 +85,24 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
+    /// Force the pipeline to use CPU even if CUDA is available.
+    pub fn cpu(mut self) -> Self {
+        self.device_request = DeviceRequest::Cpu;
+        self
+    }
+
+    /// Select a specific CUDA device by index.
+    pub fn cuda_device(mut self, index: usize) -> Self {
+        self.device_request = DeviceRequest::Cuda(index);
+        self
+    }
+
+    /// Provide a preconstructed device.
+    pub fn device(mut self, device: Device) -> Self {
+        self.device_request = DeviceRequest::Explicit(device);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
@@ -97,8 +126,14 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.top_k.unwrap_or(default_params.top_k),
             self.min_p.unwrap_or(default_params.min_p),
         );
+        let device = match self.device_request {
+            DeviceRequest::Default => load_device_with(None)?,
+            DeviceRequest::Cpu => Device::Cpu,
+            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
+            DeviceRequest::Explicit(d) => d,
+        };
 
-        TextGenerationPipeline::new(model, gen_params)
+        TextGenerationPipeline::new(model, gen_params, device)
     }
 
     pub fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
@@ -130,8 +165,14 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             builder.register_tag(*tag);
         }
         let xml_parser = builder.build();
+        let device = match self.device_request {
+            DeviceRequest::Default => load_device_with(None)?,
+            DeviceRequest::Cpu => Device::Cpu,
+            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
+            DeviceRequest::Explicit(d) => d,
+        };
 
-        XmlGenerationPipeline::new(model, gen_params, xml_parser)
+        XmlGenerationPipeline::new(model, gen_params, xml_parser, device)
     }
 }
 

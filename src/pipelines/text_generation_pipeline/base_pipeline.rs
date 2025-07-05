@@ -3,7 +3,6 @@ use super::text_generation_model::TextGenerationModel;
 use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };
-use crate::pipelines::utils::load_device;
 use candle_core::Tensor;
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
@@ -20,10 +19,13 @@ pub struct BasePipeline<M: TextGenerationModel> {
 }
 
 impl<M: TextGenerationModel> BasePipeline<M> {
-    pub fn new(model: M, gen_params: GenerationParams) -> anyhow::Result<Self> {
+    pub fn new(
+        model: M,
+        gen_params: GenerationParams,
+        device: candle_core::Device,
+    ) -> anyhow::Result<Self> {
         let model_tokenizer = model.get_tokenizer()?;
         let context = model.new_context();
-        let device = load_device()?;
 
         // Collect textual forms of special tokens for display filtering
         let mut special_strings: std::collections::HashSet<String> = model_tokenizer

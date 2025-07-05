@@ -50,9 +50,13 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
 }
 
 impl<M: TextGenerationModel> TextGenerationPipeline<M> {
-    pub fn new(model: M, gen_params: GenerationParams) -> anyhow::Result<Self> {
+    pub fn new(
+        model: M,
+        gen_params: GenerationParams,
+        device: candle_core::Device,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            base: BasePipeline::new(model, gen_params)?,
+            base: BasePipeline::new(model, gen_params, device)?,
         })
     }
 
@@ -339,6 +343,14 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
     pub fn register_tool<T: IntoTool>(&self, tool: T) -> anyhow::Result<()> {
         let tool = tool.into_tool();
         self.base.model.lock().unwrap().register_tool(tool)
+    }
+
+    pub fn unregister_tool(&self, name: &str) -> anyhow::Result<()> {
+        self.base.model.lock().unwrap().unregister_tool(name)
+    }
+
+    pub fn clear_tools(&self) -> anyhow::Result<()> {
+        self.base.model.lock().unwrap().clear_tools()
     }
 
     pub fn register_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
