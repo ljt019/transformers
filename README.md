@@ -20,7 +20,7 @@ Generate text for various applications, supports general completions, as well as
 
 ---
 
-**Qwen3 Series**  
+**Qwen3**  
 *Optimized for tool calling and structured output*
 
 ```markdown
@@ -37,7 +37,7 @@ Generate text for various applications, supports general completions, as well as
 
 ---
 
-**Gemma3 Series**  
+**Gemma3**  
 *Google's models for general language tasks*
 
 ```markdown
