@@ -8,7 +8,6 @@ repository = "https://github.com/ljt019/transformers/"
 
 [dependencies]
 anyhow = "1.0.98"
-hf-hub = "0.4.2"
 minijinja = { version = "2.9.0", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 tokenizers = "0.21.1"
@@ -26,6 +25,7 @@ minijinja-contrib = { version = "2.9.0", features = ["pycompat"] }
 aho-corasick = "1.1.3"
 candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.9.1" }
 candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.1" }
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq", "native-tls"] }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
