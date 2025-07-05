@@ -24,12 +24,15 @@ async fn main() -> Result<()> {
     // Build a pipeline with XML parsing capabilities
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
-        .build_xml(&["think", "tool_result", "tool_call"])?;
+        .build_xml(&["think", "tool_result", "tool_call"])
+        .await?;
 
-    pipeline.register_tools(tools![get_weather])?;
+    pipeline.register_tools(tools![get_weather]).await?;
 
     // Stream completion - this will yield Event items
-    let mut stream = pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
+    let mut stream = pipeline
+        .completion_stream_with_tools("What's the weather like in Tokyo?")
+        .await?;
 
     println!("\n--- Streaming Events ---");
 
