@@ -2637,7 +2637,6 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "once_cell",
- "parking_lot",
  "rand 0.9.1",
  "regex",
  "serde",
