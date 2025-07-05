@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 //! Logit Processing and Sampling
 //!
 //! Functionality for modeling sampling strategies and logits processing in text generation

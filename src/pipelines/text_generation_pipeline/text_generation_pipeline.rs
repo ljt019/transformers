@@ -1,3 +1,5 @@
+#![allow(unused_assignments)]
+
 use super::base_pipeline::BasePipeline;
 
 use super::text_generation_model::TextGenerationModel;

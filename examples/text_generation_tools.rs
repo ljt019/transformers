@@ -21,7 +21,6 @@ fn get_temperature(city: String) -> Result<String, ToolError> {
     ));
 }
 
-/*
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Building pipeline...");
@@ -44,8 +43,8 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-*/
 
+/*
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Building pipeline...");
@@ -64,3 +63,4 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+*/

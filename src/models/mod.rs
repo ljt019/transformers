@@ -7,9 +7,6 @@ pub mod quantized_qwen3;
 
 pub use quantized_nn::RmsNorm;
 
-pub use quantized_gemma3::Gemma3Size;
-pub use quantized_qwen3::Qwen3Size;
-
 use candle_core::{Result, Tensor};
 use candle_nn::Module;
 
