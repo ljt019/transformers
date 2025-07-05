@@ -4,21 +4,24 @@
 use transformers::pipelines::zero_shot_classification_pipeline::*;
 use candle_core::DeviceLocation;
 
-#[test]
-fn basic_zero_shot_classification() -> anyhow::Result<()> {
+#[tokio::test]
+async fn basic_zero_shot_classification() -> anyhow::Result<()> {
     let pipeline =
-        ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
+        ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base)
+            .build()
+            .await?;
     let labels = ["politics", "sports"];
     let res = pipeline.predict("The election results were surprising", &labels)?;
     assert_eq!(res.len(), 2);
     Ok(())
 }
 
-#[test]
-fn select_cuda_device() -> anyhow::Result<()> {
+#[tokio::test]
+async fn select_cuda_device() -> anyhow::Result<()> {
     let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base)
         .cuda_device(0)
-        .build()?;
+        .build()
+        .await?;
     match pipeline.device().location() {
         DeviceLocation::Cuda { gpu_id } => assert_eq!(gpu_id, 0),
         _ => {}
@@ -26,11 +29,12 @@ fn select_cuda_device() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
-fn select_cpu_device() -> anyhow::Result<()> {
+#[tokio::test]
+async fn select_cpu_device() -> anyhow::Result<()> {
     let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base)
         .cpu()
-        .build()?;
+        .build()
+        .await?;
     assert!(pipeline.device().is_cpu());
     Ok(())
 }

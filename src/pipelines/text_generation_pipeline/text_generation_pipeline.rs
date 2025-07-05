@@ -49,7 +49,7 @@ pub struct TextGenerationPipeline<M: TextGenerationModel> {
     base: BasePipeline<M>,
 }
 
-impl<M: TextGenerationModel> TextGenerationPipeline<M> {
+impl<M: TextGenerationModel + Send> TextGenerationPipeline<M> {
     pub fn new(
         model: M,
         gen_params: GenerationParams,
@@ -61,37 +61,37 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     }
 
     /// Get the current position in the context (number of cached tokens)
-    pub fn context_position(&self) -> usize {
-        self.base.context_position()
+    pub async fn context_position(&self) -> usize {
+        self.base.context_position().await
     }
 
-    pub fn set_generation_params(&self, params: GenerationParams) {
-        self.base.set_generation_params(params);
+    pub async fn set_generation_params(&self, params: GenerationParams) {
+        self.base.set_generation_params(params).await;
     }
 
     /// Return the maximum context length supported by the model.
-    pub fn max_context_length(&self) -> usize {
-        self.base.model.lock().unwrap().get_max_seq_len()
+    pub async fn max_context_length(&self) -> usize {
+        self.base.model.lock().await.get_max_seq_len()
     }
 
     /// Generate a completion from either a prompt or a chat history.
     /// Returns a String.
-    pub fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
+    pub async fn completion<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
         match input.into() {
-            Input::Prompt(p) => self.prompt_completion_internal(p),
-            Input::Messages(m) => self.message_completion_internal(m),
+            Input::Prompt(p) => self.prompt_completion_internal(p).await,
+            Input::Messages(m) => self.message_completion_internal(m).await,
         }
     }
 
-    fn prompt_completion_internal(&self, prompt: &str) -> anyhow::Result<String> {
+    async fn prompt_completion_internal(&self, prompt: &str) -> anyhow::Result<String> {
         // Reset context for fresh generation
-        self.base.context.lock().unwrap().reset();
+        self.base.context.lock().await.reset();
 
         let templated_prompt = self
             .base
             .model
             .lock()
-            .unwrap()
+            .await
             .apply_chat_template(&[crate::Message::user(prompt)])?;
 
         let prompt_tokens = self
@@ -102,15 +102,15 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .get_ids()
             .to_vec();
 
-        self.base.completion_from_tokens(&prompt_tokens)
+        self.base.completion_from_tokens(&prompt_tokens).await
     }
 
-    fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+    async fn message_completion_internal(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
         let templated_prompt = self
             .base
             .model
             .lock()
-            .unwrap()
+            .await
             .apply_chat_template(messages)?;
 
         let new_tokens = self
@@ -122,63 +122,63 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .to_vec();
 
         // Check if we need to reset due to context overflow
-        let max_seq_len = self.base.model.lock().unwrap().get_max_seq_len();
+        let max_seq_len = self.base.model.lock().await.get_max_seq_len();
         let pending_tokens = new_tokens.len();
 
-        if self.base.context.lock().unwrap().position() + pending_tokens > max_seq_len {
+        if self.base.context.lock().await.position() + pending_tokens > max_seq_len {
             // Context would overflow, reset and start fresh
-            self.base.context.lock().unwrap().reset();
-            self.base.last_processed_tokens.lock().unwrap().clear();
-        } else if self.base.can_reuse_cache(&new_tokens) {
+            self.base.context.lock().await.reset();
+            self.base.last_processed_tokens.lock().await.clear();
+        } else if self.base.can_reuse_cache(&new_tokens).await {
             // Cache prefix matches, only feed the suffix
-            let prefix_len = self.base.last_processed_tokens.lock().unwrap().len();
+            let prefix_len = self.base.last_processed_tokens.lock().await.len();
             let new_portion = &new_tokens[prefix_len..];
-            let response = self.base.completion_from_tokens(new_portion)?;
+            let response = self.base.completion_from_tokens(new_portion).await?;
 
             // Track only prompt tokens for next turn
-            *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+            *self.base.last_processed_tokens.lock().await = new_tokens;
             return Ok(response);
         } else {
             // Cache is invalid (conversation changed), reset
-            self.base.context.lock().unwrap().reset();
+            self.base.context.lock().await.reset();
         }
 
         // Process all tokens from scratch
-        let response = self.base.completion_from_tokens(&new_tokens)?;
+        let response = self.base.completion_from_tokens(&new_tokens).await?;
 
         // Update tracking (prompt tokens only)
-        *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+        *self.base.last_processed_tokens.lock().await = new_tokens;
 
         Ok(response)
     }
 
     /// Streaming version of completion
-    pub fn completion_stream<'a>(
+    pub async fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
     ) -> anyhow::Result<
         crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'a>,
     > {
         match input.into() {
-            Input::Prompt(p) => self.prompt_completion_stream(p),
-            Input::Messages(m) => self.message_completion_stream(m),
+            Input::Prompt(p) => self.prompt_completion_stream(p).await,
+            Input::Messages(m) => self.message_completion_stream(m).await,
         }
     }
 
-    fn prompt_completion_stream(
+    async fn prompt_completion_stream(
         &self,
         prompt: &str,
     ) -> anyhow::Result<
         crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<'_>,
     > {
         // Fresh turn → reset context
-        self.base.context.lock().unwrap().reset();
+        self.base.context.lock().await.reset();
 
         let templated = self
             .base
             .model
             .lock()
-            .unwrap()
+            .await
             .apply_chat_template(&[crate::Message::user(prompt)])?;
         let tokens = self
             .base
@@ -197,7 +197,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         )
     }
 
-    fn message_completion_stream(
+    async fn message_completion_stream(
         &self,
         messages: &[crate::Message],
     ) -> anyhow::Result<
@@ -207,7 +207,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .base
             .model
             .lock()
-            .unwrap()
+            .await
             .apply_chat_template(messages)?;
         let new_tokens = self
             .base
@@ -218,21 +218,21 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
             .to_vec();
 
         // Same cache logic
-        let max_seq = self.base.model.lock().unwrap().get_max_seq_len();
-        if self.base.context.lock().unwrap().position() + new_tokens.len() > max_seq {
-            self.base.context.lock().unwrap().reset();
-            self.base.last_processed_tokens.lock().unwrap().clear();
-        } else if self.base.can_reuse_cache(&new_tokens) {
+        let max_seq = self.base.model.lock().await.get_max_seq_len();
+        if self.base.context.lock().await.position() + new_tokens.len() > max_seq {
+            self.base.context.lock().await.reset();
+            self.base.last_processed_tokens.lock().await.clear();
+        } else if self.base.can_reuse_cache(&new_tokens).await {
             let suffix =
-                new_tokens[self.base.last_processed_tokens.lock().unwrap().len()..].to_vec();
-            *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+                new_tokens[self.base.last_processed_tokens.lock().await.len()..].to_vec();
+            *self.base.last_processed_tokens.lock().await = new_tokens;
             let inner = self.raw_completion_stream(suffix);
             return Ok(crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(Box::pin(inner)));
         } else {
-            self.base.context.lock().unwrap().reset();
+            self.base.context.lock().await.reset();
         }
 
-        *self.base.last_processed_tokens.lock().unwrap() = new_tokens.clone();
+        *self.base.last_processed_tokens.lock().await = new_tokens.clone();
         let inner = self.raw_completion_stream(new_tokens);
         Ok(
             crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
@@ -250,12 +250,14 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
     {
         // Capture everything the async generator needs **by value**
         let device = self.base.device.clone();
-        let eos_tokens = self.base.model.lock().unwrap().get_eos_tokens();
+        let model = Arc::clone(&self.base.model);
         let tokenizer = self.base.model_tokenizer.clone();
         let context = Arc::clone(&self.base.context);
-        let params = self.base.gen_params.lock().unwrap().clone();
+        let gen_params = Arc::clone(&self.base.gen_params);
 
         Box::pin(try_stream! {
+            let params = gen_params.lock().await.clone();
+            let eos_tokens = model.lock().await.get_eos_tokens();
             const CHUNK_SIZE: usize = 64;
 
             let mut logits_processor =
@@ -270,7 +272,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 
                 let input  = Tensor::new(chunk, &device)?.unsqueeze(0)?;
                 let logits = {
-                    let mut ctx = context.lock().unwrap();
+                    let mut ctx = context.lock().await;
                     ctx.generate(&input)
                 }?;
                 last_logits = Some(logits.squeeze(0)?);
@@ -304,7 +306,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 
                 let input  = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
                 let logits = {
-                    let mut ctx = context.lock().unwrap();
+                    let mut ctx = context.lock().await;
                     ctx.generate(&input)
                 }?;
                 let logits = logits.squeeze(0)?;
@@ -337,41 +339,41 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
 
 // Implementations for models with ToggleableReasoning
 impl<M: TextGenerationModel + ToggleableReasoning> TextGenerationPipeline<M> {
-    pub fn set_reasoning(&self, enable: bool) -> anyhow::Result<()> {
-        self.base.model.lock().unwrap().set_reasoning(enable)
+    pub async fn set_reasoning(&self, enable: bool) -> anyhow::Result<()> {
+        self.base.model.lock().await.set_reasoning(enable)
     }
 }
 
 // Implementations for models with ToolCalling
 impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
-    pub fn unregister_tool(&self, name: &str) -> anyhow::Result<()> {
-        self.base.model.lock().unwrap().unregister_tool(name)
+    pub async fn unregister_tool(&self, name: &str) -> anyhow::Result<()> {
+        self.base.model.lock().await.unregister_tool(name)
     }
 
-    pub fn clear_tools(&self) -> anyhow::Result<()> {
-        self.base.model.lock().unwrap().clear_tools()
+    pub async fn clear_tools(&self) -> anyhow::Result<()> {
+        self.base.model.lock().await.clear_tools()
     }
 
-    pub fn register_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
+    pub async fn register_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
         for tool in tools {
-            self.base.model.lock().unwrap().register_tool(tool)?;
+            self.base.model.lock().await.register_tool(tool)?;
         }
         Ok(())
     }
 
-    pub fn unregister_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
+    pub async fn unregister_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
         for tool in tools {
             self.base
                 .model
                 .lock()
-                .unwrap()
+                .await
                 .unregister_tool(&tool.name)?;
         }
         Ok(())
     }
 
-    pub fn registered_tools(&self) -> Vec<Tool> {
-        self.base.model.lock().unwrap().registered_tools()
+    pub async fn registered_tools(&self) -> Vec<Tool> {
+        self.base.model.lock().await.registered_tools()
     }
 
     /// Execute a list of tool calls with retry logic and error handling
@@ -432,8 +434,8 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         Ok(tool_responses)
     }
 
-    pub fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
-        let tools = self.base.model.lock().unwrap().registered_tools();
+    pub async fn completion_with_tools<'a>(&self, input: impl Into<Input<'a>>) -> anyhow::Result<String> {
+        let tools = self.base.model.lock().await.registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tools() first.");
         }
@@ -451,7 +453,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 .base
                 .model
                 .lock()
-                .unwrap()
+                .await
                 .apply_chat_template(&messages)?;
             let new_tokens = self
                 .base
@@ -462,24 +464,24 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
                 .to_vec();
 
             // Check if we need to reset due to context overflow
-            let max_seq_len = self.base.model.lock().unwrap().get_max_seq_len();
+            let max_seq_len = self.base.model.lock().await.get_max_seq_len();
             let pending_tokens = new_tokens.len();
 
             let response =
-                if self.base.context.lock().unwrap().position() + pending_tokens > max_seq_len {
-                    self.base.context.lock().unwrap().reset();
-                    self.base.last_processed_tokens.lock().unwrap().clear();
-                    self.base.completion_from_tokens(&new_tokens)?
-                } else if self.base.can_reuse_cache(&new_tokens) {
-                    let prefix_len = self.base.last_processed_tokens.lock().unwrap().len();
+                if self.base.context.lock().await.position() + pending_tokens > max_seq_len {
+                    self.base.context.lock().await.reset();
+                    self.base.last_processed_tokens.lock().await.clear();
+                    self.base.completion_from_tokens(&new_tokens).await?
+        } else if self.base.can_reuse_cache(&new_tokens).await {
+                    let prefix_len = self.base.last_processed_tokens.lock().await.len();
                     let new_portion = &new_tokens[prefix_len..];
-                    let res = self.base.completion_from_tokens(new_portion)?;
-                    *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+                    let res = self.base.completion_from_tokens(new_portion).await?;
+                    *self.base.last_processed_tokens.lock().await = new_tokens;
                     res
                 } else {
-                    self.base.context.lock().unwrap().reset();
-                    let res = self.base.completion_from_tokens(&new_tokens)?;
-                    *self.base.last_processed_tokens.lock().unwrap() = new_tokens;
+                    self.base.context.lock().await.reset();
+                    let res = self.base.completion_from_tokens(&new_tokens).await?;
+                    *self.base.last_processed_tokens.lock().await = new_tokens;
                     res
                 };
 
@@ -517,7 +519,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         }
     }
 
-    pub fn completion_stream_with_tools<'a>(
+    pub async fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
     ) -> anyhow::Result<
@@ -526,7 +528,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         use async_stream::try_stream;
         use futures::StreamExt;
 
-        let tools = self.base.model.lock().unwrap().registered_tools();
+        let tools = self.base.model.lock().await.registered_tools();
         if tools.is_empty() {
             anyhow::bail!("No tools registered. Call register_tools() first.");
         }
@@ -550,7 +552,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
 
                 // Stream the response
                 {
-                    let stream_inner = self.completion_stream(&messages[..])?;
+                    let stream_inner = self.completion_stream(&messages[..]).await?;
                     futures::pin_mut!(stream_inner);
 
                     while let Some(chunk_res) = stream_inner.next().await {

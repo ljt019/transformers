@@ -103,14 +103,16 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
+    pub async fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: ModelOptions + Clone,
     {
         // Always use the global cache to share models
         let cache_key = self.model_options.cache_key();
-        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))?;
+        let model = global_cache()
+            .get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))
+            .await?;
 
         // Start with model-specific defaults
         let default_params = model.default_generation_params();
@@ -136,14 +138,16 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         TextGenerationPipeline::new(model, gen_params, device)
     }
 
-    pub fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
+    pub async fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: ModelOptions + Clone,
     {
         // Always use the global cache to share models
         let cache_key = self.model_options.cache_key();
-        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))?;
+        let model = global_cache()
+            .get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))
+            .await?;
 
         // Start with model-specific defaults
         let default_params = model.default_generation_params();

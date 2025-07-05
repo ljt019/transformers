@@ -6,7 +6,8 @@
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Trait implemented by model option types to generate a stable cache key.
 pub trait ModelOptions {
@@ -41,7 +42,7 @@ impl ModelCache {
     ///
     /// # Type Parameters
     /// * `M` - The model type, must be Clone + Send + Sync
-    pub fn get_or_create<M, F>(&self, key: &str, loader: F) -> anyhow::Result<M>
+    pub async fn get_or_create<M, F>(&self, key: &str, loader: F) -> anyhow::Result<M>
     where
         M: Clone + Send + Sync + 'static,
         F: FnOnce() -> anyhow::Result<M>,
@@ -51,7 +52,7 @@ impl ModelCache {
 
         // First, try to get from cache
         {
-            let cache = self.cache.lock().unwrap();
+            let cache = self.cache.lock().await;
             if let Some(cached) = cache.get(&cache_key) {
                 if let Some(model) = cached.downcast_ref::<M>() {
                     return Ok(model.clone());
@@ -64,7 +65,7 @@ impl ModelCache {
 
         // Store in cache
         {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock().await;
             cache.insert(
                 cache_key,
                 Arc::new(model.clone()) as Arc<dyn Any + Send + Sync>,
@@ -75,14 +76,14 @@ impl ModelCache {
     }
 
     /// Clear all cached models.
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn clear(&self) {
+        let mut cache = self.cache.lock().await;
         cache.clear();
     }
 
     /// Get the number of cached models.
-    pub fn len(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
+    pub async fn len(&self) -> usize {
+        let cache = self.cache.lock().await;
         cache.len()
     }
 }
@@ -114,8 +115,8 @@ mod tests {
         id: String,
     }
 
-    #[test]
-    fn test_cache_returns_same_instance() {
+    #[tokio::test]
+    async fn test_cache_returns_same_instance() {
         let cache = ModelCache::new();
 
         let model1 = cache
@@ -124,6 +125,7 @@ mod tests {
                     id: "original".to_string(),
                 })
             })
+            .await
             .unwrap();
 
         let model2 = cache
@@ -133,6 +135,7 @@ mod tests {
                     id: "new".to_string(),
                 })
             })
+            .await
             .unwrap();
 
         assert_eq!(model1.id, model2.id);

@@ -7,16 +7,19 @@ fn get_weather(city: String) -> Result<String, ToolError> {
     Ok(format!("The weather in {} is sunny.", city))
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Build a pipeline with XML parsing capabilities
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(1024)
-        .build_xml(&["think", "tool_result", "tool_call"])?;
-
-    pipeline.register_tools(tools![get_weather])?;
+        .build_xml(&["think", "tool_result", "tool_call"])
+        .await?;
+    pipeline.register_tools(tools![get_weather]).await?;
 
     // Generate completion - this will return Vec<Event>
-    let events = pipeline.completion_with_tools("What's the weather like in Tokyo?")?;
+    let events = pipeline
+        .completion_with_tools("What's the weather like in Tokyo?")
+        .await?;
 
     println!("\n--- Generated Events ---");
     for event in events {

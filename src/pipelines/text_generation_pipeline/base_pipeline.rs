@@ -4,7 +4,8 @@ use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };
 use candle_core::Tensor;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokenizers::Tokenizer;
 
 /// Base structure containing common fields for both pipeline types
@@ -52,24 +53,24 @@ impl<M: TextGenerationModel> BasePipeline<M> {
     }
 
     /// Get the current position in the context (number of cached tokens)
-    pub fn context_position(&self) -> usize {
-        self.context.lock().unwrap().position()
+    pub async fn context_position(&self) -> usize {
+        self.context.lock().await.position()
     }
 
-    pub fn set_generation_params(&self, params: GenerationParams) {
-        *self.gen_params.lock().unwrap() = params;
+    pub async fn set_generation_params(&self, params: GenerationParams) {
+        *self.gen_params.lock().await = params;
     }
 
-    pub fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
+    pub async fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
         // Cache can be reused if the new prompt begins with the exact token
         // sequence that is already cached.
-        new_tokens.starts_with(&self.last_processed_tokens.lock().unwrap())
+        new_tokens.starts_with(&self.last_processed_tokens.lock().await)
     }
 
-    pub fn completion_from_tokens(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
+    pub async fn completion_from_tokens(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
         const CHUNK_SIZE: usize = 64; // Must be <= initial kv cache size
 
-        let params = self.gen_params.lock().unwrap().clone();
+        let params = self.gen_params.lock().await.clone();
 
         let mut logits_processor = initialize_logits_processor(&params, params.seed);
 
@@ -84,7 +85,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
 
             let input = Tensor::new(chunk, &self.device)?.unsqueeze(0)?;
             let logits = {
-                let mut ctx = self.context.lock().unwrap();
+                let mut ctx = self.context.lock().await;
                 ctx.generate(&input)
             }?;
             last_logits = Some(logits.squeeze(0)?);
@@ -96,7 +97,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
         generated_tokens.push(next_token);
 
         // Generate autoregressively
-        let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
+        let eos_tokens = self.model.lock().await.get_eos_tokens();
         for _ in 0..params.max_len {
             if eos_tokens.contains(&next_token) {
                 break;
@@ -104,7 +105,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
 
             let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             let logits = {
-                let mut ctx = self.context.lock().unwrap();
+                let mut ctx = self.context.lock().await;
                 ctx.generate(&input)
             }?;
             let logits = logits.squeeze(0)?;
@@ -123,7 +124,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
         }
 
         // Filter out EOS tokens before decoding
-        let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
+        let eos_tokens = self.model.lock().await.get_eos_tokens();
         let filtered_tokens: Vec<u32> = generated_tokens
             .into_iter()
             .filter(|&token| !eos_tokens.contains(&token))

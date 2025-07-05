@@ -1,17 +1,21 @@
 use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::*;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Start by creating the pipeline, using the builder to configure any generation parameters.
     // Parameters are optional, defaults are set to good values for each model.
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .temperature(0.7)
         .top_k(40)
         .max_len(1024)
-        .build()?;
+        .build()
+        .await?;
 
     // Get a completion from a prompt.
-    let completion = pipeline.completion("Explain the concept of Large Language Models in simple terms.")?;
+    let completion = pipeline
+        .completion("Explain the concept of Large Language Models in simple terms.")
+        .await?;
 
     println!("\n--- Generated Text ---");
     println!("{}", completion);
@@ -22,7 +26,7 @@ fn main() -> Result<()> {
         Message::user("What is the capital of France?"),
     ];
 
-    let completion = pipeline.completion(&messages)?;
+    let completion = pipeline.completion(&messages).await?;
 
     println!("\n--- Generated Text 2 ---");
     println!("{}", completion);
@@ -32,7 +36,7 @@ fn main() -> Result<()> {
     messages.push(Message::user("What are some fun things to do there?"));
 
     // Now ask a follow-up question.
-    let completion = pipeline.completion(&messages)?;
+    let completion = pipeline.completion(&messages).await?;
 
     println!("\n--- Generated Text 3 (Follow-up) ---");
     println!("{}", completion);
