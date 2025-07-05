@@ -50,6 +50,7 @@ async fn main() -> Result<()> {
                 TagParts::Content => print!("{}", event.get_content()),
                 TagParts::End => println!("[END TOOL CALL]\n"),
             },
+            Some(_) => { /* ignore unknown tags */ }
             None => match event.part() {
                 TagParts::Start => println!("[OUTPUT]"),
                 TagParts::Content => print!("{}", event.get_content()),
