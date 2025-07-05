@@ -138,4 +138,92 @@ impl<M: TextGenerationModel> BasePipeline<M> {
 
         Ok(generated_tokens_str)
     }
+
+    /// Stream tokens from the model given input tokens.
+    pub fn token_stream<'a>(
+        &'a self,
+        input_tokens: Vec<u32>,
+    ) -> impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a
+    where
+        M: 'a + Send,
+    {
+        // Capture everything the async generator needs by value
+        let device = self.device.clone();
+        let model = std::sync::Arc::clone(&self.model);
+        let tokenizer = self.model_tokenizer.clone();
+        let context = std::sync::Arc::clone(&self.context);
+        let gen_params = std::sync::Arc::clone(&self.gen_params);
+
+        async_stream::try_stream! {
+            let params = gen_params.lock().await.clone();
+            let eos_tokens = model.lock().await.get_eos_tokens();
+            const CHUNK_SIZE: usize = 64;
+
+            let mut logits_processor =
+                initialize_logits_processor(&params, params.seed);
+
+            let mut idx = 0;
+            let mut last_logits = None;
+            while idx < input_tokens.len() {
+                let end = usize::min(idx + CHUNK_SIZE, input_tokens.len());
+                let chunk = &input_tokens[idx..end];
+
+                let input = Tensor::new(chunk, &device)?.unsqueeze(0)?;
+                let logits = {
+                    let mut ctx = context.lock().await;
+                    ctx.generate(&input)
+                }?;
+                last_logits = Some(logits.squeeze(0)?);
+                idx = end;
+            }
+
+            let mut generated: Vec<u32> = Vec::with_capacity(params.max_len);
+
+            let mut dec_full = tokenizer.decode_stream(false);
+
+            let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
+            generated.push(next_token);
+
+            if !eos_tokens.contains(&next_token) {
+                if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                    yield chunk;
+                }
+            } else {
+                let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
+            }
+
+            for _ in 0..params.max_len {
+                if eos_tokens.contains(&next_token) {
+                    break;
+                }
+
+                let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+                let logits = {
+                    let mut ctx = context.lock().await;
+                    ctx.generate(&input)
+                }?;
+                let logits = logits.squeeze(0)?;
+
+                let start_at = generated.len().saturating_sub(params.repeat_last_n);
+                let penalty_context = &generated[start_at..];
+
+                let logits = if params.repeat_penalty <= 1. || penalty_context.is_empty() {
+                    logits
+                } else {
+                    apply_repeat_penalty(&logits, params.repeat_penalty, penalty_context)?
+                };
+
+                next_token = logits_processor.sample(&logits)?;
+                generated.push(next_token);
+
+                if !eos_tokens.contains(&next_token) {
+                    if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
+                        yield chunk;
+                    }
+                } else {
+                    let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
+        }
+    }
 }

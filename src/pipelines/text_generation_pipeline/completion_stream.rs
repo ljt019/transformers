@@ -1,22 +1,31 @@
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use pin_project_lite::pin_project;
 
 /// Convenience wrapper around the streaming output of [`TextGenerationPipeline`].
-pub struct CompletionStream<'a> {
-    inner: Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>,
+pin_project! {
+    pub struct CompletionStream<S> {
+        #[pin]
+        inner: S,
+    }
 }
 
-impl<'a> CompletionStream<'a> {
-    pub(crate) fn new(inner: Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>) -> Self {
+impl<S> CompletionStream<S> {
+    pub(crate) fn new(inner: S) -> Self {
         Self { inner }
     }
 
     /// Collect the entire stream into a single `String`.
-    pub async fn collect(mut self) -> anyhow::Result<String> {
-        use futures::StreamExt;
+    pub async fn collect(mut self) -> anyhow::Result<String>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
+        use futures::{StreamExt, pin_mut};
+        let mut inner = self.inner;
+        pin_mut!(inner);
         let mut out = String::new();
-        while let Some(chunk) = self.inner.next().await {
+        while let Some(chunk) = inner.next().await {
             out.push_str(&chunk?);
         }
         Ok(out)
@@ -26,11 +35,16 @@ impl<'a> CompletionStream<'a> {
     ///
     /// If the underlying stream ends before `n` chunks are yielded,
     /// the returned vector will contain fewer elements.
-    pub async fn take(mut self, n: usize) -> anyhow::Result<Vec<String>> {
-        use futures::StreamExt;
+    pub async fn take(mut self, n: usize) -> anyhow::Result<Vec<String>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
+        use futures::{StreamExt, pin_mut};
+        let mut inner = self.inner;
+        pin_mut!(inner);
         let mut out = Vec::new();
         for _ in 0..n {
-            match self.inner.next().await {
+            match inner.next().await {
                 Some(chunk) => out.push(chunk?),
                 None => break,
             }
@@ -39,10 +53,14 @@ impl<'a> CompletionStream<'a> {
     }
 }
 
-impl<'a> Stream for CompletionStream<'a> {
+impl<S> Stream for CompletionStream<S>
+where
+    S: Stream<Item = anyhow::Result<String>>, 
+{
     type Item = anyhow::Result<String>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().inner.as_mut().poll_next(cx)
+        let this = self.project();
+        this.inner.poll_next(cx)
     }
 }
