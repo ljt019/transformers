@@ -27,14 +27,17 @@ async fn main() -> Result<()> {
 
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(8192)
-        .build()?;
+        .build()
+        .await?;
 
     println!("Pipeline built successfully.");
 
-    pipeline.register_tools(tools![get_temperature, get_humidity])?;
+    pipeline.register_tools(tools![get_temperature, get_humidity]).await?;
 
     let mut stream =
-        pipeline.completion_stream_with_tools("What's the temp and humidity like in Tokyo?")?;
+        pipeline
+            .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
+            .await?;
 
     println!("Generating text 1...");
 
@@ -43,10 +46,12 @@ async fn main() -> Result<()> {
         std::io::stdout().flush().unwrap();
     }
 
-    pipeline.unregister_tools(tools![get_temperature])?;
+    pipeline.unregister_tools(tools![get_temperature]).await?;
 
     let mut stream =
-        pipeline.completion_stream_with_tools("What's the temp and humidity like in Tokyo?")?;
+        pipeline
+            .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
+            .await?;
 
     println!("Generating text 2...");
 

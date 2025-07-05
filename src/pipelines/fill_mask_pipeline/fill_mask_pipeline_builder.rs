@@ -32,7 +32,7 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<FillMaskPipeline<M>>
+    pub async fn build(self) -> anyhow::Result<FillMaskPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
         M::Options: ModelOptions + Clone,
@@ -42,7 +42,9 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
             None => crate::pipelines::utils::load_device()?,
         };
         let key = format!("{}-{:?}", self.options.cache_key(), device.location());
-        let model = global_cache().get_or_create(&key, || M::new(self.options.clone(), device.clone()))?;
+        let model = global_cache()
+            .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
+            .await?;
         let tokenizer = M::get_tokenizer(self.options)?;
         Ok(FillMaskPipeline { model, tokenizer })
     }
