@@ -131,51 +131,6 @@ impl GenerationConfigLoader {
     }
 }
 
-pub struct TokenizerConfig {
-    pub chat_template: String,
-    pub special_tokens: Vec<String>,
-}
-
-pub struct TokenizerConfigLoader {
-    pub tokenizer_config_file_loader: HfLoader,
-}
-
-impl TokenizerConfigLoader {
-    pub fn new(repo: &str, filename: &str) -> Self {
-        let tokenizer_config_file_loader = HfLoader::new(repo, filename);
-
-        Self {
-            tokenizer_config_file_loader,
-        }
-    }
-
-    pub fn load(&self) -> anyhow::Result<TokenizerConfig> {
-        let tokenizer_config_file_path = self.tokenizer_config_file_loader.load()?;
-
-        let file = std::fs::File::open(tokenizer_config_file_path)?;
-        let config_json: serde_json::Value = serde_json::from_reader(file)?;
-
-        let chat_template = config_json["chat_template"].as_str().unwrap_or("");
-
-        let special_tokens = config_json["additional_special_tokens"]
-            .as_array()
-            .expect("Couldn't find special tokens")
-            .iter()
-            .map(|token| {
-                token
-                    .as_str()
-                    .expect("Couldn't find special tokens")
-                    .to_string()
-            })
-            .collect::<Vec<String>>();
-
-        Ok(TokenizerConfig {
-            chat_template: chat_template.to_string(),
-            special_tokens,
-        })
-    }
-}
-
 #[derive(Clone)]
 pub struct GgufModelLoader {
     pub model_file_loader: HfLoader,

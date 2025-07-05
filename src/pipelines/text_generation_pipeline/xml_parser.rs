@@ -385,7 +385,7 @@ impl XmlParser {
                             if content.len() > already_emitted {
                                 let remaining_content = &content[already_emitted..];
                                 // Strip leading newlines if this is the first content emission
-                                let mut content_to_emit = if already_emitted == 0 {
+                                let content_to_emit = if already_emitted == 0 {
                                     remaining_content.trim_start_matches('\n')
                                 } else {
                                     remaining_content
@@ -537,7 +537,7 @@ impl XmlParser {
                 if content.len() > already_emitted {
                     let remaining_content = &content[already_emitted..];
                     // Strip leading newlines if this is the first content emission
-                    let mut content_to_emit = if already_emitted == 0 {
+                    let content_to_emit = if already_emitted == 0 {
                         remaining_content.trim_start_matches('\n')
                     } else {
                         remaining_content
