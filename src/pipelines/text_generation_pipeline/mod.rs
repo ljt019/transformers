@@ -1,23 +1,24 @@
 pub mod base_pipeline;
+pub mod completion_stream;
 pub mod text_generation_model;
 pub mod text_generation_pipeline;
 pub mod text_generation_pipeline_builder;
 pub mod tool_error;
 pub mod xml_generation_pipeline;
 pub mod xml_parser;
-pub mod completion_stream;
 
 pub use crate::tools;
+pub use completion_stream::CompletionStream;
 pub use text_generation_pipeline::{Input, TextGenerationPipeline};
 pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
-pub use completion_stream::CompletionStream;
 
 // Convenience re-exports so users can simply
 // `use transformers::pipelines::text_generation_pipeline::*;` and access
 // the common model size enums and the `#[tool]` macro without additional
 // import clutter.
 
+pub use crate::models::generation::GenerationParams;
 pub use crate::models::quantized_gemma3::Gemma3Size;
 pub use crate::models::quantized_qwen3::Qwen3Size;
 
@@ -40,7 +41,7 @@ pub use anyhow::Result;
 pub use std::io::Write;
 
 pub use tool_error::ToolError;
-pub use xml_parser::{Event, XmlParser, XmlParserBuilder, TagParts};
+pub use xml_parser::{Event, TagParts, XmlParser, XmlParserBuilder};
 
 #[macro_export]
 macro_rules! tools {

@@ -12,7 +12,7 @@ pub struct BasePipeline<M: TextGenerationModel> {
     pub model: Arc<Mutex<M>>,
     pub model_tokenizer: Tokenizer,
     pub context: Arc<Mutex<M::Context>>,
-    pub gen_params: GenerationParams,
+    pub gen_params: Arc<Mutex<GenerationParams>>,
     pub device: candle_core::Device,
     pub last_processed_tokens: Arc<Mutex<Vec<u32>>>,
     pub special_strings: std::collections::HashSet<String>,
@@ -44,7 +44,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
             model: Arc::new(Mutex::new(model)),
             model_tokenizer,
             context: Arc::new(Mutex::new(context)),
-            gen_params,
+            gen_params: Arc::new(Mutex::new(gen_params)),
             device,
             last_processed_tokens: Arc::new(Mutex::new(Vec::new())),
             special_strings,
@@ -56,6 +56,10 @@ impl<M: TextGenerationModel> BasePipeline<M> {
         self.context.lock().unwrap().position()
     }
 
+    pub fn set_generation_params(&self, params: GenerationParams) {
+        *self.gen_params.lock().unwrap() = params;
+    }
+
     pub fn can_reuse_cache(&self, new_tokens: &[u32]) -> bool {
         // Cache can be reused if the new prompt begins with the exact token
         // sequence that is already cached.
@@ -65,10 +69,11 @@ impl<M: TextGenerationModel> BasePipeline<M> {
     pub fn completion_from_tokens(&self, input_tokens: &[u32]) -> anyhow::Result<String> {
         const CHUNK_SIZE: usize = 64; // Must be <= initial kv cache size
 
-        let mut logits_processor =
-            initialize_logits_processor(&self.gen_params, self.gen_params.seed);
+        let params = self.gen_params.lock().unwrap().clone();
 
-        let mut generated_tokens: Vec<u32> = Vec::with_capacity(self.gen_params.max_len);
+        let mut logits_processor = initialize_logits_processor(&params, params.seed);
+
+        let mut generated_tokens: Vec<u32> = Vec::with_capacity(params.max_len);
 
         // Feed the initial prompt in manageable chunks to allow the KV cache to grow.
         let mut idx = 0;
@@ -92,7 +97,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
 
         // Generate autoregressively
         let eos_tokens = self.model.lock().unwrap().get_eos_tokens();
-        for _ in 0..self.gen_params.max_len {
+        for _ in 0..params.max_len {
             if eos_tokens.contains(&next_token) {
                 break;
             }
@@ -104,15 +109,13 @@ impl<M: TextGenerationModel> BasePipeline<M> {
             }?;
             let logits = logits.squeeze(0)?;
 
-            let start_at = generated_tokens
-                .len()
-                .saturating_sub(self.gen_params.repeat_last_n);
+            let start_at = generated_tokens.len().saturating_sub(params.repeat_last_n);
             let penalty_context = &generated_tokens[start_at..];
 
-            let logits = if self.gen_params.repeat_penalty <= 1. || penalty_context.is_empty() {
+            let logits = if params.repeat_penalty <= 1. || penalty_context.is_empty() {
                 logits
             } else {
-                apply_repeat_penalty(&logits, self.gen_params.repeat_penalty, penalty_context)?
+                apply_repeat_penalty(&logits, params.repeat_penalty, penalty_context)?
             };
 
             next_token = logits_processor.sample(&logits)?;

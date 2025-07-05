@@ -40,6 +40,10 @@ impl<M: TextGenerationModel> XmlGenerationPipeline<M> {
         self.base.context_position()
     }
 
+    pub fn set_generation_params(&self, params: GenerationParams) {
+        self.base.set_generation_params(params);
+    }
+
     /// Get a reference to the XML parser
     pub fn xml_parser(&self) -> &XmlParser {
         &self.xml_parser
@@ -274,7 +278,7 @@ impl<M: TextGenerationModel> XmlGenerationPipeline<M> {
         let eos_tokens = self.base.model.lock().unwrap().get_eos_tokens();
         let tokenizer = self.base.model_tokenizer.clone();
         let context = Arc::clone(&self.base.context);
-        let params = self.base.gen_params.clone();
+        let params = self.base.gen_params.lock().unwrap().clone();
 
         Box::pin(try_stream! {
             const CHUNK_SIZE: usize = 64;
