@@ -18,7 +18,7 @@ fn unregister_and_clear() -> anyhow::Result<()> {
     pipeline.unregister_tool("echo")?;
     assert!(pipeline.registered_tools().is_empty());
 
-    pipeline.register_tool(echo)?;
+    pipeline.register_tools(tools![echo])?;
     assert_eq!(pipeline.registered_tools().len(), 1);
 
     pipeline.clear_tools()?;
