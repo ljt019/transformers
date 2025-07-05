@@ -36,7 +36,7 @@ fn main() -> Result<()> {
                 TagParts::Content => print!("{}", event.get_content()),
                 TagParts::End => println!("[END TOOL CALL]\n"),
             },
-            _ => match event.part() {
+            None => match event.part() {
                 TagParts::Start => println!("[OUTPUT]"),
                 TagParts::Content => print!("{}", event.get_content()),
                 TagParts::End => println!("[END OUTPUT]\n"),
