@@ -4,11 +4,32 @@ use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
 
 pub struct FillMaskPipelineBuilder<M: FillMaskModel> {
     options: M::Options,
+    device: Option<candle_core::Device>,
 }
 
 impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
     pub fn new(options: M::Options) -> Self {
-        Self { options }
+        Self {
+            options,
+            device: None,
+        }
+    }
+
+    pub fn cpu(mut self) -> Self {
+        self.device = Some(candle_core::Device::Cpu);
+        self
+    }
+
+    pub fn cuda_device(mut self, index: usize) -> Self {
+        let dev = candle_core::Device::new_cuda_with_stream(index)
+            .unwrap_or(candle_core::Device::Cpu);
+        self.device = Some(dev);
+        self
+    }
+
+    pub fn device(mut self, device: candle_core::Device) -> Self {
+        self.device = Some(device);
+        self
     }
 
     pub fn build(self) -> anyhow::Result<FillMaskPipeline<M>>
@@ -16,8 +37,12 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
         M: Clone + Send + Sync + 'static,
         M::Options: ModelOptions + Clone,
     {
-        let key = self.options.cache_key();
-        let model = global_cache().get_or_create(&key, || M::new(self.options.clone()))?;
+        let device = match self.device {
+            Some(d) => d,
+            None => crate::pipelines::utils::load_device()?,
+        };
+        let key = format!("{}-{:?}", self.options.cache_key(), device.location());
+        let model = global_cache().get_or_create(&key, || M::new(self.options.clone(), device.clone()))?;
         let tokenizer = M::get_tokenizer(self.options)?;
         Ok(FillMaskPipeline { model, tokenizer })
     }
