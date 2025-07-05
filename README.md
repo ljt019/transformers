@@ -10,34 +10,92 @@
 
 Transformers provides a simple, intuitive interface for Rust developers who want to work with Large Language Models locally, powered by the [Candle](https://github.com/huggingface/candle) crate. It offers an API inspired by Python's [Transformers](https://huggingface.co/docs/transformers), tailored for Rust developers.
 
-## Supported Pipelines
+## Available Pipelines
 
-- Text Generation
-- Sentiment Analysis
-- Zero Shot Classification
-- Fill Mask
+***Note**: Currently, models are accessible through these pipelines only. Direct model interface coming eventually!*
 
-## Currently Implemented Models
+### Text Generation Pipeline
 
-- [Qwen3](https://huggingface.co/Qwen/Qwen3-0.6B) (Text Generation)
-  - 0.6B
-  - 1.7B
-  - 4B
-  - 8B
-  - 14B
-  - 32B
+Generate text for various applications, supports general completions, as well as function/tool calling, and streamed responsees.
 
-- [Gemma3](https://huggingface.co/google/gemma-3-27b-it) (Text Generation)
-  - 1B
-  - 4B
-  - 12B
-  - 27B
-  
-- ModernBERT ([ZeroShot](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0), [Sentiment Analysis](https://huggingface.co/clapAI/modernBERT-base-multilingual-sentiment), [Fill Mask](https://huggingface.co/answerdotai/ModernBERT-base))
-  - Base
-  - Large
+---
 
-All ModernBERT-based pipelines share the same backbone architecture while loading task-specific finetuned checkpoints.
+**Qwen3 Series**  
+*Optimized for tool calling and structured output*
+
+```markdown
+ Parameter Sizes:
+├── 0.6B
+├── 1.7B
+├── 4B
+├── 8B
+├── 14B
+└── 32B
+```
+
+[→ View on HuggingFace](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f)
+
+---
+
+**Gemma3 Series**  
+*Google's models for general language tasks*
+
+```markdown
+ Parameter Sizes:
+├── 1B
+├── 4B
+├── 12B
+└── 27B
+```
+
+[→ View on HuggingFace](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d)
+
+### Analysis Pipelines
+
+ModernBERT powers three specialized analysis tasks with shared architecture:
+
+---
+
+#### **Fill Mask Pipeline**
+*Complete missing words in text*
+
+```markdown
+ Available Sizes:
+├── Base
+└── Large
+```
+
+[→ View on HuggingFace](https://huggingface.co/answerdotai/ModernBERT-base)
+
+---
+
+#### **Sentiment Analysis Pipeline**
+*Analyze emotional tone in multiple languages*
+
+```markdown
+ Available Sizes:
+├── Base ···· Fast & efficient
+└── Large ··· Higher accuracy
+```
+
+[→ View on HuggingFace](https://huggingface.co/clapAI/modernBERT-base-multilingual-sentiment)
+
+---
+
+#### **Zero-shot Classification Pipeline**
+*Classify text without training examples*
+
+```markdown
+ Available Sizes:
+├── Base ···· Fast & efficient
+└── Large ··· Higher accuracy
+```
+
+[→ View on HuggingFace](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0)
+
+---
+
+***Technical Note**: All ModernBERT pipelines share the same backbone architecture, loading task-specific finetuned weights as needed.*
 
 ## Usage
 
