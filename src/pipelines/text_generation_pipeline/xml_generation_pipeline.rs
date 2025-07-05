@@ -23,14 +23,14 @@ pub struct XmlGenerationPipeline<M: TextGenerationModel> {
 }
 
 impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
-    pub fn new(
+    pub async fn new(
         model: M,
         gen_params: GenerationParams,
         xml_parser: XmlParser,
         device: candle_core::Device,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            base: BasePipeline::new(model, gen_params, device)?,
+            base: BasePipeline::new(model, gen_params, device).await?,
             xml_parser,
         })
     }

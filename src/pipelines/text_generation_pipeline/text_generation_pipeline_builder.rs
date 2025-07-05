@@ -111,7 +111,9 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         // Always use the global cache to share models
         let cache_key = self.model_options.cache_key();
         let model = global_cache()
-            .get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))
+            .get_or_create_async(&cache_key, || async {
+                M::new(self.model_options.clone()).await
+            })
             .await?;
 
         // Start with model-specific defaults
@@ -135,7 +137,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             DeviceRequest::Explicit(d) => d,
         };
 
-        TextGenerationPipeline::new(model, gen_params, device)
+        TextGenerationPipeline::new(model, gen_params, device).await
     }
 
     pub async fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
@@ -146,7 +148,9 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         // Always use the global cache to share models
         let cache_key = self.model_options.cache_key();
         let model = global_cache()
-            .get_or_create(&cache_key, || Ok(M::new(self.model_options.clone())))
+            .get_or_create_async(&cache_key, || async {
+                M::new(self.model_options.clone()).await
+            })
             .await?;
 
         // Start with model-specific defaults
@@ -176,7 +180,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             DeviceRequest::Explicit(d) => d,
         };
 
-        XmlGenerationPipeline::new(model, gen_params, xml_parser, device)
+        XmlGenerationPipeline::new(model, gen_params, xml_parser, device).await
     }
 }
 
