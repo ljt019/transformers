@@ -658,4 +658,83 @@ mod tests {
         assert_eq!(events[2].part(), TagParts::End);
         assert_eq!(events[2].tag_handle(), Some(&think_tag));
     }
+
+    #[test]
+    fn test_self_closing_tag_ignored() {
+        let mut builder = XmlParserBuilder::new();
+        builder.register_tag("think");
+        let parser = builder.build();
+
+        let text = "<think/>Hello";
+        let events = parser.parse_complete(text);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), None);
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Hello\n");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), None);
+    }
+
+    #[test]
+    fn test_tag_with_attributes() {
+        let mut builder = XmlParserBuilder::new();
+        let think_tag = builder.register_tag("think");
+        let parser = builder.build();
+
+        let text = "<think answer=\"yes\">Content</think>";
+        let events = parser.parse_complete(text);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), Some(&think_tag));
+        assert_eq!(events[1].part(), TagParts::Content);
+        assert_eq!(events[1].get_content(), "Content\n");
+        assert_eq!(events[2].part(), TagParts::End);
+        assert_eq!(events[2].tag_handle(), Some(&think_tag));
+    }
+
+    #[test]
+    fn test_nested_registered_tags() {
+        let mut builder = XmlParserBuilder::new();
+        let outer = builder.register_tag("think");
+        let inner = builder.register_tag("inner");
+        let parser = builder.build();
+
+        let text = "<think>hi<inner>there</inner>end</think>";
+        let events = parser.parse_complete(text);
+
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0].part(), TagParts::Start);
+        assert_eq!(events[0].tag_handle(), Some(&outer));
+        assert_eq!(events[1].part(), TagParts::Start);
+        assert_eq!(events[1].tag_handle(), Some(&inner));
+        assert_eq!(events[2].part(), TagParts::Content);
+        assert_eq!(events[2].tag_handle(), Some(&inner));
+        assert_eq!(events[2].get_content(), "there\n");
+        assert_eq!(events[3].part(), TagParts::End);
+        assert_eq!(events[3].tag_handle(), Some(&inner));
+        assert_eq!(events[4].part(), TagParts::Content);
+        assert_eq!(events[4].tag_handle(), Some(&outer));
+        assert_eq!(events[4].get_content(), "hiend\n");
+        assert_eq!(events[5].part(), TagParts::End);
+        assert_eq!(events[5].tag_handle(), Some(&outer));
+    }
+
+    #[test]
+    fn test_parse_token_equivalent_to_complete() {
+        let mut builder = XmlParserBuilder::new();
+        builder.register_tag("think");
+        let parser = builder.build();
+
+        let text = "<think>Hello</think>";
+        let expected = parser.parse_complete(text);
+
+        parser.reset();
+        let mut actual = parser.parse_token(text);
+        actual.extend(parser.flush());
+
+        assert_eq!(expected, actual);
+    }
 }
