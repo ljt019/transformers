@@ -154,8 +154,8 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "candle-core"
-version = "0.9.2"
-source = "git+https://github.com/ljt019/candle#a19897ddbb42a9f10fac37d8656989ebf9140345"
+version = "0.9.1"
+source = "git+https://github.com/huggingface/candle.git#d0a3b33ecd7efcd6c827fd9f1da1403cbd97331b"
 dependencies = [
  "byteorder",
  "gemm 0.17.1",
@@ -175,8 +175,8 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.9.2"
-source = "git+https://github.com/ljt019/candle#a19897ddbb42a9f10fac37d8656989ebf9140345"
+version = "0.9.1"
+source = "git+https://github.com/huggingface/candle.git#d0a3b33ecd7efcd6c827fd9f1da1403cbd97331b"
 dependencies = [
  "candle-core",
  "half",
@@ -445,7 +445,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "976dd42dc7e85965fe702eb8164f21f450704bdde31faefd6471dba214cb594e"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1282,7 +1282,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -2056,7 +2056,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2390,7 +2390,7 @@ dependencies = [
  "getrandom 0.3.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2941,7 +2941,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

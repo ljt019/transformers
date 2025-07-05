@@ -1,7 +1,7 @@
 use super::base_pipeline::BasePipeline;
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_model::{
-    ErrorStrategy, IntoTool, LanguageModelContext, ToggleableReasoning, Tool, ToolCalling,
+    ErrorStrategy, LanguageModelContext, ToggleableReasoning, Tool, ToolCalling,
 };
 use super::text_generation_pipeline::Input;
 use super::xml_parser::{Event, XmlParser};
@@ -369,11 +369,6 @@ impl<M: TextGenerationModel + ToggleableReasoning> XmlGenerationPipeline<M> {
 
 // Implementations for models with ToolCalling
 impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
-    pub fn register_tool<T: IntoTool>(&self, tool: T) -> anyhow::Result<()> {
-        let tool = tool.into_tool();
-        self.base.model.lock().unwrap().register_tool(tool)
-    }
-
     pub fn unregister_tool(&self, name: &str) -> anyhow::Result<()> {
         self.base.model.lock().unwrap().unregister_tool(name)
     }
@@ -385,6 +380,17 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     pub fn register_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
         for tool in tools {
             self.base.model.lock().unwrap().register_tool(tool)?;
+        }
+        Ok(())
+    }
+
+    pub fn unregister_tools(&self, tools: Vec<Tool>) -> anyhow::Result<()> {
+        for tool in tools {
+            self.base
+                .model
+                .lock()
+                .unwrap()
+                .unregister_tool(&tool.name)?;
         }
         Ok(())
     }
@@ -457,7 +463,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     ) -> anyhow::Result<Vec<Event>> {
         let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
-            anyhow::bail!("No tools registered. Call register_tool() first.");
+            anyhow::bail!("No tools registered. Call register_tools() first.");
         }
 
         let mut messages = match input.into() {
@@ -548,7 +554,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
         let tools = self.base.model.lock().unwrap().registered_tools();
         if tools.is_empty() {
-            anyhow::bail!("No tools registered. Call register_tool() first.");
+            anyhow::bail!("No tools registered. Call register_tools() first.");
         }
 
         let initial_messages = match input.into() {
