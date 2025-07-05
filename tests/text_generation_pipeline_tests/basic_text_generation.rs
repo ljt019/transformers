@@ -41,3 +41,21 @@ fn test_empty_input_handling() -> anyhow::Result<()> {
     assert!(!out.trim().is_empty());
     Ok(())
 }
+
+#[test]
+fn test_set_generation_params() -> anyhow::Result<()> {
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .seed(42)
+        .max_len(1)
+        .build()?;
+
+    let short = pipeline.completion("Rust is a")?;
+
+    let new_params = GenerationParams::new(0.7, 1.0, 64, 42, 8, 1.0, 0, 0.0);
+    pipeline.set_generation_params(new_params);
+
+    let longer = pipeline.completion("Rust is a")?;
+
+    assert!(longer.len() >= short.len());
+    Ok(())
+}

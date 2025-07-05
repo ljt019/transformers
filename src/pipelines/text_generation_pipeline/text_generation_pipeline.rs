@@ -61,6 +61,10 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         self.base.context_position()
     }
 
+    pub fn set_generation_params(&self, params: GenerationParams) {
+        self.base.set_generation_params(params);
+    }
+
     /// Return the maximum context length supported by the model.
     pub fn max_context_length(&self) -> usize {
         self.base.model.lock().unwrap().get_max_seq_len()
@@ -245,7 +249,7 @@ impl<M: TextGenerationModel> TextGenerationPipeline<M> {
         let eos_tokens = self.base.model.lock().unwrap().get_eos_tokens();
         let tokenizer = self.base.model_tokenizer.clone();
         let context = Arc::clone(&self.base.context);
-        let params = self.base.gen_params.clone();
+        let params = self.base.gen_params.lock().unwrap().clone();
 
         Box::pin(try_stream! {
             const CHUNK_SIZE: usize = 64;
