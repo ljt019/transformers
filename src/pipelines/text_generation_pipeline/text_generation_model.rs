@@ -88,6 +88,8 @@ pub trait ToggleableReasoning {
 
 pub trait ToolCalling {
     fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()>;
+    fn unregister_tool(&mut self, name: &str) -> anyhow::Result<()>;
+    fn clear_tools(&mut self) -> anyhow::Result<()>;
     fn registered_tools(&self) -> Vec<Tool>;
     fn call_tool(
         &mut self,

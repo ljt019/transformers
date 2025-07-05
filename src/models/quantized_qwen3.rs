@@ -963,6 +963,18 @@ impl ToolCalling for Qwen3Model {
         Ok(())
     }
 
+    fn unregister_tool(&mut self, name: &str) -> anyhow::Result<()> {
+        if let Some(pos) = self.tools.iter().position(|t| t.name() == name) {
+            self.tools.remove(pos);
+        }
+        Ok(())
+    }
+
+    fn clear_tools(&mut self) -> anyhow::Result<()> {
+        self.tools.clear();
+        Ok(())
+    }
+
     fn registered_tools(&self) -> Vec<Tool> {
         self.tools.clone()
     }
