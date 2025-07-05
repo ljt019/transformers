@@ -74,8 +74,8 @@ ModernBERT powers three specialized analysis tasks with shared architecture:
 
 ```markdown
  Available Sizes:
-├── Base ···· Fast & efficient
-└── Large ··· Higher accuracy
+├── Base
+└── Large
 ```
 
 [→ View on HuggingFace](https://huggingface.co/clapAI/modernBERT-base-multilingual-sentiment)
@@ -87,8 +87,8 @@ ModernBERT powers three specialized analysis tasks with shared architecture:
 
 ```markdown
  Available Sizes:
-├── Base ···· Fast & efficient
-└── Large ··· Higher accuracy
+├── Base
+└── Large
 ```
 
 [→ View on HuggingFace](https://huggingface.co/MoritzLaurer/ModernBERT-base-zeroshot-v2.0)
