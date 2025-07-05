@@ -17,16 +17,33 @@ impl HfLoader {
     }
 
     pub fn load(&self) -> anyhow::Result<PathBuf> {
-        let file_path = {
-            let hf_api = HfApi::new()?;
-            let hf_repo = self.repo.clone();
+        let hf_api = HfApi::new()?;
+        let hf_repo = self.repo.clone();
+        let hf_api = hf_api.model(hf_repo);
 
-            let hf_api = hf_api.model(hf_repo);
+        // Retry logic for lock acquisition failures
+        let max_retries = 3;
+        let mut last_error = None;
 
-            hf_api.get(self.filename.as_str())?
-        };
+        for attempt in 0..max_retries {
+            match hf_api.get(self.filename.as_str()) {
+                Ok(path) => return Ok(path),
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Lock acquisition failed") && attempt < max_retries - 1 {
+                        // Wait before retrying, with exponential backoff
+                        let wait_time = std::time::Duration::from_millis(100 * (1 << attempt));
+                        std::thread::sleep(wait_time);
+                        last_error = Some(e);
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
 
-        return Ok(file_path);
+        // If we exhausted all retries, return the last error
+        Err(last_error.unwrap().into())
     }
 }
 
