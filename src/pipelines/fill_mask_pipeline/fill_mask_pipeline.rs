@@ -10,4 +10,8 @@ impl<M: FillMaskModel> FillMaskPipeline<M> {
     pub fn fill_mask(&self, text: &str) -> anyhow::Result<String> {
         self.model.predict(&self.tokenizer, text)
     }
+
+    pub fn device(&self) -> &candle_core::Device {
+        self.model.device()
+    }
 }
