@@ -145,6 +145,7 @@ The `Message` struct represents a single message in a chat and has a `role` (sys
 ```rust
 use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
 use transformers::pipelines::text_generation_pipeline::Messages;
+use futures::StreamExt;
 
 fn main() -> anyhow::Result<()> {
     // 1. Create the pipeline
@@ -235,6 +236,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // 3. Do something with tokens as they are generated
+    futures::pin_mut!(stream);
     while let Some(tok) = stream.next().await {
         print!("{}", tok);
         std::io::stdout().flush().unwrap();

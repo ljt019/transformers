@@ -1,6 +1,7 @@
 use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::ToolError;
 use transformers::pipelines::text_generation_pipeline::*;
+use futures::StreamExt;
 
 #[tool(on_error = ErrorStrategy::Fail, retries = 5)]
 /// Get the weather for a given city.
@@ -38,6 +39,7 @@ async fn main() -> Result<()> {
         pipeline
             .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
             .await?;
+    futures::pin_mut!(stream);
 
     println!("Generating text 1...");
 
@@ -52,6 +54,7 @@ async fn main() -> Result<()> {
         pipeline
             .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
             .await?;
+    futures::pin_mut!(stream);
 
     println!("Generating text 2...");
 
