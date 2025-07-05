@@ -26,7 +26,7 @@ async fn multiple_pipelines_share_weights_and_have_independent_caches() -> anyho
     let _ = pipelines[0].completion(prompt).await?;
 
     // The first pipeline should have advanced its context
-    assert!(pipelines[0].context_position() > 0);
+    assert!(pipelines[0].context_position().await > 0);
 
     // Other pipelines should remain untouched
     for (idx, p) in pipelines.iter().enumerate().skip(1) {

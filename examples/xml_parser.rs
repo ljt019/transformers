@@ -14,6 +14,7 @@ async fn main() -> Result<()> {
         .max_len(1024)
         .build_xml(&["think", "tool_result", "tool_call"])
         .await?;
+
     pipeline.register_tools(tools![get_weather]).await?;
 
     // Generate completion - this will return Vec<Event>
