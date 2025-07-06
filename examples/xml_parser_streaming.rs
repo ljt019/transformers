@@ -1,6 +1,6 @@
 use anyhow::Result;
+use futures::{pin_mut, StreamExt};
 use transformers::pipelines::text_generation_pipeline::*;
-use futures::StreamExt;
 
 #[tool]
 /// Calculates the average speed given distance and time
@@ -31,9 +31,10 @@ async fn main() -> Result<()> {
     pipeline.register_tools(tools![get_weather]).await?;
 
     // Stream completion - this will yield Event items
-    let mut stream = pipeline
+    let stream = pipeline
         .completion_stream_with_tools("What's the weather like in Tokyo?")
         .await?;
+    pin_mut!(stream);
 
     println!("\n--- Streaming Events ---");
 
