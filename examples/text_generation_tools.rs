@@ -1,6 +1,6 @@
 use anyhow::Result;
-use transformers::pipelines::text_generation_pipeline::ToolError;
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::ToolError;
+use transformers::pipelines::text_generation::*;
 use std::io::Write;
 
 #[tool(on_error = ErrorStrategy::Fail, retries = 5)]

@@ -2,7 +2,7 @@
 // This is a separate crate that tests the public API
 
 use transformers::pipelines::global_cache;
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 #[tokio::test]
 async fn multiple_pipelines_share_weights_and_have_independent_caches() -> anyhow::Result<()> {

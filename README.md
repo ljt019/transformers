@@ -115,7 +115,7 @@ There are two basic ways to generate text:
 Use the `completion` method for straightforward text generation from a single prompt string.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 fn main() -> anyhow::Result<()> {
     // 1. Create the pipeline
@@ -143,8 +143,8 @@ The `Message` struct represents a single message in a chat and has a `role` (sys
 - `Message::assistant(content: &str)`: For model responses.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
-use transformers::pipelines::text_generation_pipeline::Messages;
+use transformers::pipelines::text_generation::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation::Messages;
 use futures::StreamExt;
 
 fn main() -> anyhow::Result<()> {
@@ -175,8 +175,8 @@ Using tools with models is also made extremely easy, you just define tools using
 Using the tools is as easy as calling `completion_with_tools` after having tools registered to the pipeline.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
-use transformers::pipelines::text_generation_pipeline::Messages;
+use transformers::pipelines::text_generation::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation::Messages;
 
 // 1. Define the tools
 #[tool]
@@ -221,8 +221,8 @@ helpers now return a `Result` to surface any errors that may occur during
 streaming.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
-use transformers::pipelines::text_generation_pipeline::Messages;
+use transformers::pipelines::text_generation::TextGenerationPipelineBuilder;
+use transformers::pipelines::text_generation::Messages;
 
 fn main() -> anyhow::Result<()> {
     // 1. Create the pipeline
@@ -250,7 +250,7 @@ fn main() -> anyhow::Result<()> {
 You can build pipelines with XML parsing capabilities to handle structured outputs from models. This is particularly useful for parsing tool calls, and reasoning traces.
 
 ```rust
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 fn main() -> anyhow::Result<()> {
     // 1. Build a pipeline with XML parsing for specific tags

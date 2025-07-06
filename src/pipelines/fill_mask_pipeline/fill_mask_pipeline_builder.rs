@@ -1,6 +1,6 @@
 use super::fill_mask_model::FillMaskModel;
 use super::fill_mask_pipeline::FillMaskPipeline;
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::utils::cache::{global_cache, ModelOptions};
 
 pub struct FillMaskPipelineBuilder<M: FillMaskModel> {
     options: M::Options,
@@ -39,7 +39,7 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
     {
         let device = match self.device {
             Some(d) => d,
-            None => crate::pipelines::utils::load_device()?,
+            None => crate::utils::load_device()?,
         };
         let key = format!("{}-{:?}", self.options.cache_key(), device.location());
         let model = global_cache()

@@ -1,9 +1,9 @@
-pub mod base_pipeline;
+pub mod base;
 pub mod completion_stream;
 pub mod event_stream;
 pub mod text_generation_model;
-pub mod text_generation_pipeline;
-pub mod text_generation_pipeline_builder;
+pub mod pipeline;
+pub mod builder;
 pub mod tool_error;
 pub mod xml_generation_pipeline;
 pub mod xml_parser;
@@ -11,12 +11,12 @@ pub mod xml_parser;
 pub use crate::tools;
 pub use completion_stream::CompletionStream;
 pub use event_stream::EventStream;
-pub use text_generation_pipeline::{Input, TextGenerationPipeline};
-pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
+pub use pipeline::{Input, TextGenerationPipeline};
+pub use builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
 
 // Convenience re-exports so users can simply
-// `use transformers::pipelines::text_generation_pipeline::*;` and access
+// `use transformers::pipelines::text_generation::*;` and access
 // the common model size enums and the `#[tool]` macro without additional
 // import clutter.
 
