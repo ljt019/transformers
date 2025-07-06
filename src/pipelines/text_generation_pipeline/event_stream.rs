@@ -4,15 +4,13 @@ use std::task::{Context, Poll};
 use pin_project_lite::pin_project;
 use super::xml_parser::Event;
 
-/// Convenience wrapper around the streaming output of XML pipeline.
 pin_project! {
+    /// Convenience wrapper around the streaming output of XML pipeline.
     pub struct EventStream<S> {
         #[pin]
         inner: Pin<Box<S>>,
     }
 }
-
-impl<S> Unpin for EventStream<S> {}
 
 impl<S> EventStream<S> {
     pub(crate) fn new(inner: S) -> Self {
@@ -76,13 +74,13 @@ impl<S> EventStream<S> {
     }
 
     /// Filter events based on a predicate.
-    pub fn filter<F>(self, f: F) -> EventStream<impl Stream<Item = Event>>
+    pub fn filter<F>(self, mut f: F) -> EventStream<impl Stream<Item = Event>>
     where
         S: Stream<Item = Event>,
         F: FnMut(&Event) -> bool,
     {
         use futures::StreamExt;
-        EventStream::new(self.inner.filter(f))
+        EventStream::new(self.inner.filter(move |item| std::future::ready(f(item))))
     }
 
     /// Map each event through a function.

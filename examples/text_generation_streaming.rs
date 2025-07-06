@@ -1,5 +1,6 @@
 use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::*;
+use std::io::Write;
 
 #[tokio::main]
 async fn main() -> Result<()> {

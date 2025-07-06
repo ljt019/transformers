@@ -3,15 +3,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use pin_project_lite::pin_project;
 
-/// Convenience wrapper around the streaming output of [`TextGenerationPipeline`].
 pin_project! {
+    /// Convenience wrapper around the streaming output of [`TextGenerationPipeline`].
     pub struct CompletionStream<S> {
         #[pin]
         inner: Pin<Box<S>>,
     }
 }
-
-impl<S> Unpin for CompletionStream<S> {}
 
 impl<S> CompletionStream<S> {
     pub(crate) fn new(inner: S) -> Self {
@@ -72,17 +70,17 @@ impl<S> CompletionStream<S> {
     }
 
     /// Filter chunks in the stream based on a predicate.
-    pub fn filter<F>(self, f: F) -> CompletionStream<impl Stream<Item = anyhow::Result<String>>>
+    pub fn filter<F>(self, mut f: F) -> CompletionStream<impl Stream<Item = anyhow::Result<String>>>
     where
         S: Stream<Item = anyhow::Result<String>>,
         F: FnMut(&anyhow::Result<String>) -> bool,
     {
         use futures::StreamExt;
-        CompletionStream::new(self.inner.filter(f))
+        CompletionStream::new(self.inner.filter(move |item| std::future::ready(f(item))))
     }
 
     /// Fold over the stream, producing a single value.
-    pub async fn fold<T, F>(mut self, init: T, mut f: F) -> T
+    pub async fn fold<T, F>(self, init: T, mut f: F) -> T
     where
         S: Stream<Item = anyhow::Result<String>>,
         F: FnMut(T, anyhow::Result<String>) -> T,
