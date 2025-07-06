@@ -2652,6 +2652,7 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "once_cell",
+ "pin-project-lite",
  "rand 0.9.1",
  "regex",
  "serde",

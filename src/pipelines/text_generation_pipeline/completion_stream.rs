@@ -1,22 +1,41 @@
 use futures::Stream;
+use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-/// Convenience wrapper around the streaming output of [`TextGenerationPipeline`].
-pub struct CompletionStream<'a> {
-    inner: Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>,
+pin_project! {
+    pub struct CompletionStream<S> {
+        #[pin]
+        inner: Pin<Box<S>>,
+    }
 }
 
-impl<'a> CompletionStream<'a> {
-    pub(crate) fn new(inner: Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>) -> Self {
-        Self { inner }
+impl<S> CompletionStream<S> {
+    pub(crate) fn new(inner: S) -> Self {
+        Self {
+            inner: Box::pin(inner),
+        }
+    }
+
+    /// Get the next chunk from the stream.
+    ///
+    /// Returns `None` when the stream is exhausted.
+    pub async fn next(&mut self) -> Option<anyhow::Result<String>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
+        use futures::StreamExt;
+        self.inner.as_mut().next().await
     }
 
     /// Collect the entire stream into a single `String`.
-    pub async fn collect(mut self) -> anyhow::Result<String> {
+    pub async fn collect(mut self) -> anyhow::Result<String>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
         use futures::StreamExt;
         let mut out = String::new();
-        while let Some(chunk) = self.inner.next().await {
+        while let Some(chunk) = self.inner.as_mut().next().await {
             out.push_str(&chunk?);
         }
         Ok(out)
@@ -26,23 +45,62 @@ impl<'a> CompletionStream<'a> {
     ///
     /// If the underlying stream ends before `n` chunks are yielded,
     /// the returned vector will contain fewer elements.
-    pub async fn take(mut self, n: usize) -> anyhow::Result<Vec<String>> {
+    pub async fn take(mut self, n: usize) -> anyhow::Result<Vec<String>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
         use futures::StreamExt;
         let mut out = Vec::new();
         for _ in 0..n {
-            match self.inner.next().await {
+            match self.inner.as_mut().next().await {
                 Some(chunk) => out.push(chunk?),
                 None => break,
             }
         }
         Ok(out)
     }
+
+    /// Map each chunk in the stream through a function.
+    pub fn map<F, T>(self, f: F) -> CompletionStream<impl Stream<Item = T>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(anyhow::Result<String>) -> T,
+    {
+        use futures::StreamExt;
+        CompletionStream::new(self.inner.map(f))
+    }
+
+    /// Filter chunks in the stream based on a predicate.
+    pub fn filter<F>(self, mut f: F) -> CompletionStream<impl Stream<Item = anyhow::Result<String>>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(&anyhow::Result<String>) -> bool,
+    {
+        use futures::StreamExt;
+        CompletionStream::new(self.inner.filter(move |item| std::future::ready(f(item))))
+    }
+
+    /// Fold over the stream, producing a single value.
+    pub async fn fold<T, F>(self, init: T, mut f: F) -> T
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(T, anyhow::Result<String>) -> T,
+    {
+        use futures::StreamExt;
+        self.inner
+            .fold(init, |acc, item| std::future::ready(f(acc, item)))
+            .await
+    }
 }
 
-impl<'a> Stream for CompletionStream<'a> {
+impl<S> Stream for CompletionStream<S>
+where
+    S: Stream<Item = anyhow::Result<String>>,
+{
     type Item = anyhow::Result<String>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().inner.as_mut().poll_next(cx)
+        let mut this = self.project();
+        this.inner.as_mut().as_mut().poll_next(cx)
     }
 }
