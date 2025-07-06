@@ -607,7 +607,7 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
-impl crate::utils::ModelOptions for Gemma3Size {
+impl crate::core::ModelOptions for Gemma3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -695,8 +695,7 @@ impl Gemma3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }

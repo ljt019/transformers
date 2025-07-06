@@ -1,15 +1,16 @@
 pub mod base_pipeline;
+pub mod builder;
 pub mod parser;
 pub mod streaming;
 pub mod text_generation_model;
 pub mod text_generation_pipeline;
-pub mod text_generation_pipeline_builder;
 pub mod tools;
 pub mod xml_generation_pipeline;
 
+pub use crate::tools;
+pub use builder::TextGenerationPipelineBuilder;
 pub use streaming::{CompletionStream, EventStream};
 pub use text_generation_pipeline::{Input, TextGenerationPipeline};
-pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
 
 // Convenience re-exports so users can simply

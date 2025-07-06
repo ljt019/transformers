@@ -2,7 +2,6 @@ pub mod core;
 mod loaders;
 mod models;
 pub mod pipelines;
-pub mod utils;
 
 // Re-export the `#[tool]` procedural macro so users can simply write
 // `use transformers::tool;` and annotate their functions without adding an

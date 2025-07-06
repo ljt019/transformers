@@ -1,6 +1,6 @@
 use super::zero_shot_classification_model::ZeroShotClassificationModel;
 use super::zero_shot_classification_pipeline::ZeroShotClassificationPipeline;
-use crate::utils::{global_cache, ModelOptions};
+use crate::core::{global_cache, ModelOptions};
 
 pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel> {
     options: M::Options,
@@ -21,8 +21,8 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
     }
 
     pub fn cuda_device(mut self, index: usize) -> Self {
-        let dev = candle_core::Device::new_cuda_with_stream(index)
-            .unwrap_or(candle_core::Device::Cpu);
+        let dev =
+            candle_core::Device::new_cuda_with_stream(index).unwrap_or(candle_core::Device::Cpu);
         self.device = Some(dev);
         self
     }
@@ -50,7 +50,11 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
     }
 }
 
-impl ZeroShotClassificationPipelineBuilder<crate::models::implementations::modernbert::ZeroShotModernBertModel> {
+impl
+    ZeroShotClassificationPipelineBuilder<
+        crate::models::implementations::modernbert::ZeroShotModernBertModel,
+    >
+{
     pub fn modernbert(size: crate::models::ModernBertSize) -> Self {
         Self::new(size)
     }

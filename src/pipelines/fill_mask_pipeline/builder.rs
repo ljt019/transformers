@@ -1,6 +1,6 @@
 use super::fill_mask_model::FillMaskModel;
 use super::fill_mask_pipeline::FillMaskPipeline;
-use crate::utils::{global_cache, ModelOptions};
+use crate::core::{global_cache, ModelOptions};
 
 pub struct FillMaskPipelineBuilder<M: FillMaskModel> {
     options: M::Options,
@@ -21,8 +21,8 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
     }
 
     pub fn cuda_device(mut self, index: usize) -> Self {
-        let dev = candle_core::Device::new_cuda_with_stream(index)
-            .unwrap_or(candle_core::Device::Cpu);
+        let dev =
+            candle_core::Device::new_cuda_with_stream(index).unwrap_or(candle_core::Device::Cpu);
         self.device = Some(dev);
         self
     }

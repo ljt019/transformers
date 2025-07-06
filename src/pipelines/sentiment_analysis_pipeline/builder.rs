@@ -1,6 +1,6 @@
 use super::sentiment_analysis_model::SentimentAnalysisModel;
 use super::sentiment_analysis_pipeline::SentimentAnalysisPipeline;
-use crate::utils::{global_cache, ModelOptions};
+use crate::core::{global_cache, ModelOptions};
 
 pub struct SentimentAnalysisPipelineBuilder<M: SentimentAnalysisModel> {
     options: M::Options,
@@ -21,8 +21,8 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
     }
 
     pub fn cuda_device(mut self, index: usize) -> Self {
-        let dev = candle_core::Device::new_cuda_with_stream(index)
-            .unwrap_or(candle_core::Device::Cpu);
+        let dev =
+            candle_core::Device::new_cuda_with_stream(index).unwrap_or(candle_core::Device::Cpu);
         self.device = Some(dev);
         self
     }
@@ -50,7 +50,11 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
     }
 }
 
-impl SentimentAnalysisPipelineBuilder<crate::models::implementations::modernbert::SentimentModernBertModel> {
+impl
+    SentimentAnalysisPipelineBuilder<
+        crate::models::implementations::modernbert::SentimentModernBertModel,
+    >
+{
     pub fn modernbert(size: crate::models::ModernBertSize) -> Self {
         Self::new(size)
     }

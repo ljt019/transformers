@@ -544,7 +544,7 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
-impl crate::utils::ModelOptions for Qwen3Size {
+impl crate::core::ModelOptions for Qwen3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -661,8 +661,7 @@ impl Qwen3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
@@ -828,7 +827,6 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
-
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
         Context::generate(self, input)
@@ -956,8 +954,8 @@ impl ToggleableReasoning for Qwen3Model {
     }
 }
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
 use crate::core::ToolError;
+use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
 use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {

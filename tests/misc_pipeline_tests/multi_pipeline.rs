@@ -1,7 +1,7 @@
 // Integration tests for multi-pipeline functionality
 // This is a separate crate that tests the public API
 
-use transformers::pipelines::global_cache;
+use transformers::core::global_cache;
 use transformers::pipelines::text_generation_pipeline::*;
 
 #[tokio::test]
