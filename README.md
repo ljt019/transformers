@@ -400,7 +400,7 @@ fn main() -> Result<()> {
 - Add more model families and sizes
 - Support additional pipelines (summarization, classification)
 - CUDA support for faster inference
-- Direct model interface (beyond pipelines)
+- Direct model interface (beyond pipeline)
 
 ## Credits
 
