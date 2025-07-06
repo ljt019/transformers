@@ -1,6 +1,5 @@
 use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::*;
-use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -128,7 +128,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         match input.into() {
             Input::Prompt(p) => {
                 self.base.context.lock().await.reset();
@@ -184,7 +184,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
     fn event_stream_from_tokens<'a>(
         &'a self,
         tokens: Vec<u32>,
-    ) -> impl Stream<Item = Event> + Send + 'a
+    ) -> crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>
     where
         M: Send + 'a,
     {
@@ -196,7 +196,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
         self.xml_parser.reset();
         let parser = self.xml_parser.clone();
 
-        stream! {
+        let event_stream = stream! {
             futures::pin_mut!(inner);
             while let Some(result) = inner.next().await {
                 let token = result.expect("stream generation failed");
@@ -210,7 +210,9 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
             for event in final_events {
                 yield event;
             }
-        }
+        };
+        
+        crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream)
     }
 }
 
@@ -402,7 +404,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<impl Stream<Item = Event> + Send + 'a> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         use async_stream::stream;
         use futures::StreamExt;
 
@@ -418,7 +420,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
         let xml_parser = self.xml_parser.clone();
 
-        Ok(stream! {
+        let event_stream = stream! {
             let mut messages = initial_messages;
             let mut raw_buffer = String::new();  // Keep raw text with tags
 
@@ -525,7 +527,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                     }
                 }
             }
-        })
+        };
+        
+        Ok(crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream))
     }
 
     fn extract_tool_calls(text: &str) -> anyhow::Result<Vec<ToolCallInvocation>> {

@@ -11,9 +11,22 @@ pin_project! {
     }
 }
 
+impl<S> Unpin for CompletionStream<S> {}
+
 impl<S> CompletionStream<S> {
     pub(crate) fn new(inner: S) -> Self {
         Self { inner: Box::pin(inner) }
+    }
+
+    /// Get the next chunk from the stream.
+    /// 
+    /// Returns `None` when the stream is exhausted.
+    pub async fn next(&mut self) -> Option<anyhow::Result<String>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+    {
+        use futures::StreamExt;
+        self.inner.as_mut().next().await
     }
 
     /// Collect the entire stream into a single `String`.
@@ -46,6 +59,36 @@ impl<S> CompletionStream<S> {
             }
         }
         Ok(out)
+    }
+
+    /// Map each chunk in the stream through a function.
+    pub fn map<F, T>(self, f: F) -> CompletionStream<impl Stream<Item = T>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(anyhow::Result<String>) -> T,
+    {
+        use futures::StreamExt;
+        CompletionStream::new(self.inner.map(f))
+    }
+
+    /// Filter chunks in the stream based on a predicate.
+    pub fn filter<F>(self, f: F) -> CompletionStream<impl Stream<Item = anyhow::Result<String>>>
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(&anyhow::Result<String>) -> bool,
+    {
+        use futures::StreamExt;
+        CompletionStream::new(self.inner.filter(f))
+    }
+
+    /// Fold over the stream, producing a single value.
+    pub async fn fold<T, F>(mut self, init: T, mut f: F) -> T
+    where
+        S: Stream<Item = anyhow::Result<String>>,
+        F: FnMut(T, anyhow::Result<String>) -> T,
+    {
+        use futures::StreamExt;
+        self.inner.fold(init, |acc, item| std::future::ready(f(acc, item))).await
     }
 }
 
