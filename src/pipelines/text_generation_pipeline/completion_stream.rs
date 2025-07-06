@@ -1,10 +1,9 @@
 use futures::Stream;
+use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use pin_project_lite::pin_project;
 
 pin_project! {
-    /// Convenience wrapper around the streaming output of [`TextGenerationPipeline`].
     pub struct CompletionStream<S> {
         #[pin]
         inner: Pin<Box<S>>,
@@ -13,11 +12,13 @@ pin_project! {
 
 impl<S> CompletionStream<S> {
     pub(crate) fn new(inner: S) -> Self {
-        Self { inner: Box::pin(inner) }
+        Self {
+            inner: Box::pin(inner),
+        }
     }
 
     /// Get the next chunk from the stream.
-    /// 
+    ///
     /// Returns `None` when the stream is exhausted.
     pub async fn next(&mut self) -> Option<anyhow::Result<String>>
     where
@@ -86,13 +87,15 @@ impl<S> CompletionStream<S> {
         F: FnMut(T, anyhow::Result<String>) -> T,
     {
         use futures::StreamExt;
-        self.inner.fold(init, |acc, item| std::future::ready(f(acc, item))).await
+        self.inner
+            .fold(init, |acc, item| std::future::ready(f(acc, item)))
+            .await
     }
 }
 
 impl<S> Stream for CompletionStream<S>
 where
-    S: Stream<Item = anyhow::Result<String>>, 
+    S: Stream<Item = anyhow::Result<String>>,
 {
     type Item = anyhow::Result<String>;
 
