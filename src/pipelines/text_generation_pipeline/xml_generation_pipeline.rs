@@ -1,10 +1,11 @@
 use super::base_pipeline::BasePipeline;
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_model::{
-    ErrorStrategy, LanguageModelContext, ToggleableReasoning, Tool, ToolCalling,
+    LanguageModelContext, ToggleableReasoning,
 };
+use super::tools::{ErrorStrategy, Tool, ToolCalling};
 use super::text_generation_pipeline::Input;
-use super::xml_parser::{Event, XmlParser};
+use super::parser::{Event, XmlParser};
 use crate::models::generation::GenerationParams;
 use async_stream::stream;
 use regex::Regex;
@@ -128,7 +129,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::streaming::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         match input.into() {
             Input::Prompt(p) => {
                 self.base.context.lock().await.reset();
@@ -184,7 +185,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
     fn event_stream_from_tokens<'a>(
         &'a self,
         tokens: Vec<u32>,
-    ) -> crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>
+    ) -> crate::pipelines::text_generation_pipeline::streaming::EventStream<impl Stream<Item = Event> + Send + 'a>
     where
         M: Send + 'a,
     {
@@ -212,7 +213,7 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
             }
         };
         
-        crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream)
+        crate::pipelines::text_generation_pipeline::streaming::EventStream::new(event_stream)
     }
 }
 
@@ -404,7 +405,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::streaming::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         use async_stream::stream;
         use futures::StreamExt;
 
@@ -529,7 +530,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
             }
         };
         
-        Ok(crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream))
+        Ok(crate::pipelines::text_generation_pipeline::streaming::EventStream::new(event_stream))
     }
 
     fn extract_tool_calls(text: &str) -> anyhow::Result<Vec<ToolCallInvocation>> {

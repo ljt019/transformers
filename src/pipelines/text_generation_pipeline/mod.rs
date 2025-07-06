@@ -1,18 +1,16 @@
 pub mod base_pipeline;
-pub mod completion_stream;
-pub mod event_stream;
+pub mod builder;
+pub mod parser;
+pub mod streaming;
 pub mod text_generation_model;
 pub mod text_generation_pipeline;
-pub mod text_generation_pipeline_builder;
-pub mod tool_error;
+pub mod tools;
 pub mod xml_generation_pipeline;
-pub mod xml_parser;
 
 pub use crate::tools;
-pub use completion_stream::CompletionStream;
-pub use event_stream::EventStream;
+pub use builder::TextGenerationPipelineBuilder;
+pub use streaming::{CompletionStream, EventStream};
 pub use text_generation_pipeline::{Input, TextGenerationPipeline};
-pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
 
 // Convenience re-exports so users can simply
@@ -21,8 +19,7 @@ pub use xml_generation_pipeline::XmlGenerationPipeline;
 // import clutter.
 
 pub use crate::models::generation::GenerationParams;
-pub use crate::models::quantized_gemma3::Gemma3Size;
-pub use crate::models::quantized_qwen3::Qwen3Size;
+pub use crate::models::{Gemma3Size, Qwen3Size};
 
 // Re-export the procedural macro (functions as an item in Rust 2018+).
 pub use crate::tool;
@@ -42,8 +39,9 @@ pub use anyhow::Result;
 // Re-export std::io::Write for flushing stdout in examples
 pub use std::io::Write;
 
-pub use tool_error::ToolError;
-pub use xml_parser::{Event, TagParts, XmlParser, XmlParserBuilder};
+pub use crate::core::ToolError;
+pub use parser::{Event, TagParts, XmlParser, XmlParserBuilder};
+pub use tools::{ErrorStrategy, IntoTool, Tool, ToolCalling};
 
 #[macro_export]
 macro_rules! tools {

@@ -1,7 +1,5 @@
 use candle_core::{CudaDevice, Device};
 
-pub mod model_cache;
-
 /// Loads a device to be used for the model.
 /// If `index` is `Some(i)` it will attempt to load the specified CUDA device.
 /// When `None` it defaults to CUDA device 0 if available and otherwise falls back

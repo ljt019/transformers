@@ -642,7 +642,7 @@ impl std::fmt::Display for ModernBertSize {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
+impl crate::core::ModelOptions for ModernBertSize {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -791,7 +791,6 @@ pub struct ZeroShotModernBertModel {
 
 impl ZeroShotModernBertModel {
     pub fn new(size: ModernBertSize, device: Device) -> AnyhowResult<Self> {
-
         let model_id = match size {
             ModernBertSize::Base => "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string(),
             ModernBertSize::Large => "MoritzLaurer/ModernBERT-large-zeroshot-v2.0".to_string(),
@@ -1070,7 +1069,6 @@ pub struct SentimentModernBertModel {
 
 impl SentimentModernBertModel {
     pub fn new(size: ModernBertSize, device: Device) -> AnyhowResult<Self> {
-
         let model_id = match size {
             ModernBertSize::Base => "clapAI/modernBERT-base-multilingual-sentiment".to_string(),
             ModernBertSize::Large => "clapAI/modernBERT-large-multilingual-sentiment".to_string(),

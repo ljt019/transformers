@@ -607,7 +607,7 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for Gemma3Size {
+impl crate::core::ModelOptions for Gemma3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -621,7 +621,7 @@ use tokenizers::Tokenizer;
 #[derive(Clone)]
 pub struct Gemma3Model {
     weights: Arc<ModelWeights>,
-    generation_config: crate::loaders::GenerationConfig,
+    generation_config: crate::core::GenerationConfig,
     chat_template_env: Arc<Environment<'static>>,
 }
 
@@ -695,8 +695,7 @@ impl Gemma3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
@@ -946,7 +945,7 @@ impl LanguageModelContext for Context {
 #[async_trait]
 impl TextGenerationModel for Gemma3Model {
     type Options = Gemma3Size;
-    type Context = crate::models::quantized_gemma3::Context;
+    type Context = Context;
 
     async fn new(options: Self::Options) -> anyhow::Result<Self> {
         Gemma3Model::from_hf(&candle_core::Device::Cpu, options).await

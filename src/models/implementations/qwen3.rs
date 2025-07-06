@@ -544,7 +544,7 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for Qwen3Size {
+impl crate::core::ModelOptions for Qwen3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -558,8 +558,8 @@ use crate::loaders::{GgufModelLoader, TokenizerLoader};
 pub struct Qwen3Model {
     weights: Arc<ModelWeights>,
     reasoning: bool,
-    generation_config: crate::loaders::GenerationConfig,
-    tools: Vec<crate::pipelines::text_generation_pipeline::text_generation_model::Tool>,
+    generation_config: crate::core::GenerationConfig,
+    tools: Vec<crate::pipelines::text_generation_pipeline::Tool>,
     chat_template_env: Arc<Environment<'static>>,
 }
 
@@ -661,8 +661,7 @@ impl Qwen3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
@@ -828,7 +827,6 @@ use crate::pipelines::text_generation_pipeline::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
-
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
         Context::generate(self, input)
@@ -851,7 +849,7 @@ impl LanguageModelContext for Context {
 
 #[async_trait]
 impl TextGenerationModel for Qwen3Model {
-    type Context = crate::models::quantized_qwen3::Context;
+    type Context = Context;
     type Options = Qwen3Size;
 
     fn get_eos_token(&self) -> u32 {
@@ -956,8 +954,8 @@ impl ToggleableReasoning for Qwen3Model {
     }
 }
 
+use crate::core::ToolError;
 use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
-use crate::pipelines::text_generation_pipeline::tool_error::ToolError;
 use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {

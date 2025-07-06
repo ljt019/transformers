@@ -1,5 +1,4 @@
 use anyhow::Result;
-use transformers::pipelines::text_generation_pipeline::ToolError;
 use transformers::pipelines::text_generation_pipeline::*;
 use std::io::Write;
 
