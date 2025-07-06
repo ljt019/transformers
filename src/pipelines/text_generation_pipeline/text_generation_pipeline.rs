@@ -4,8 +4,9 @@ use super::base_pipeline::BasePipeline;
 
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_model::{
-    ErrorStrategy, LanguageModelContext, ToggleableReasoning, Tool, ToolCalling,
+    LanguageModelContext, ToggleableReasoning,
 };
+use super::tools::{ErrorStrategy, Tool, ToolCalling};
 use crate::models::generation::GenerationParams;
 use async_stream::try_stream;
 use regex::Regex;
@@ -151,7 +152,7 @@ impl<M: TextGenerationModel + Send> TextGenerationPipeline<M> {
         &'a self,
         input: impl Into<Input<'a>>,
     ) -> anyhow::Result<
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>,
+        crate::pipelines::text_generation_pipeline::streaming::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>,
     > {
         match input.into() {
             Input::Prompt(p) => {
@@ -208,12 +209,12 @@ impl<M: TextGenerationModel + Send> TextGenerationPipeline<M> {
     fn completion_stream_from_tokens<'a>(
         &'a self,
         tokens: Vec<u32>,
-    ) -> crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>
+    ) -> crate::pipelines::text_generation_pipeline::streaming::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>
     where
         M: Send + 'a,
     {
         let inner = self.base.token_stream(tokens);
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(inner)
+        crate::pipelines::text_generation_pipeline::streaming::CompletionStream::new(inner)
     }
 }
 
@@ -403,7 +404,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
         &'a self,
         input: impl Into<Input<'a>>,
     ) -> anyhow::Result<
-        crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>,
+        crate::pipelines::text_generation_pipeline::streaming::CompletionStream<impl futures::Stream<Item = anyhow::Result<String>> + Send + 'a>,
     > {
         use async_stream::try_stream;
         use futures::StreamExt;
@@ -469,7 +470,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> TextGenerationPipeline<M> {
             }
         };
         Ok(
-            crate::pipelines::text_generation_pipeline::completion_stream::CompletionStream::new(
+            crate::pipelines::text_generation_pipeline::streaming::CompletionStream::new(
                 out_stream,
             ),
         )

@@ -2,7 +2,7 @@ use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use pin_project_lite::pin_project;
-use super::xml_parser::Event;
+use crate::pipelines::text_generation_pipeline::parser::Event;
 
 pin_project! {
     /// Convenience wrapper around the streaming output of XML pipeline.
@@ -47,7 +47,7 @@ impl<S> EventStream<S> {
         S: Stream<Item = Event>,
     {
         use futures::StreamExt;
-        use super::xml_parser::TagParts;
+        use crate::pipelines::text_generation_pipeline::parser::TagParts;
         let mut out = String::new();
         while let Some(event) = self.inner.as_mut().next().await {
             if event.part() == TagParts::Content {
@@ -107,7 +107,7 @@ impl<S> EventStream<S> {
     where
         S: Stream<Item = Event>,
     {
-        use super::xml_parser::TagParts;
+        use crate::pipelines::text_generation_pipeline::parser::TagParts;
         self.filter(|event| event.part() == TagParts::Content)
     }
 }

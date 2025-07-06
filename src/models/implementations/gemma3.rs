@@ -1,39 +1,81 @@
-//! High-performance Qwen3 implementation with quantization support.
+//! High-performance Gemma3 implementation with quantization support.
 //!
-//! This implementation provides efficient inference for Qwen3 models with:
+//! This implementation provides efficient inference for Gemma3 models with:
 //! - Quantized weights for reduced memory usage
 //! - KV caching for autoregressive generation
 //! - Multi-context support for concurrent conversations
 //! - GPU acceleration via Candle framework
+//! - Sliding window attention patterns
 //!
 
-use crate::models::RmsNorm;
 use candle_core::quantized::{gguf_file, QMatMul};
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
-use minijinja::UndefinedBehavior;
-use minijinja::{context, Environment};
-use minijinja_contrib::{add_to_environment, pycompat};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{kv_cache::KvCache, Embedding, Module};
+use std::collections::HashMap;
 use std::io::{Read, Seek};
 use std::sync::Arc;
-use tokenizers::Tokenizer;
+
+use crate::models::RmsNorm;
 
 // Constants
+const MAX_SEQ_LEN: usize = 131072;
 const DEFAULT_CACHE_SIZE: usize = 64;
 const KV_CACHE_DIMS: usize = 2;
+const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
+const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
+const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
 
-/// Repeats a key or value tensor for grouped query attention
-/// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
-pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        Ok(xs)
-    } else {
-        let (b_sz, n_kv_head, seq_len, head_dim) = xs.dims4()?;
-        // Using cat is faster than a broadcast as it avoids going through a potentially
-        // strided copy.
-        // https://github.com/huggingface/candle/pull/2043
-        Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+/// Mask cache key for efficient caching
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct MaskCacheKey {
+    seq_len: usize,
+    index_pos: usize,
+    sliding_window_size: Option<usize>,
+}
+
+/// Cached mask entry
+#[derive(Debug, Clone)]
+struct CachedMask {
+    mask: Tensor,
+}
+
+impl CachedMask {
+    fn get_mask(&self, target_dtype: DType, b_sz: usize) -> Result<Tensor> {
+        let mask = if self.mask.dtype() != target_dtype {
+            self.mask.to_dtype(target_dtype)?
+        } else {
+            self.mask.clone()
+        };
+
+        // Expand to batch size if needed
+        if mask.dims()[0] != b_sz {
+            let mask_dims = mask.dims();
+            match mask_dims.len() {
+                4 => mask.expand((b_sz, mask_dims[1], mask_dims[2], mask_dims[3])),
+                3 => {
+                    let expanded = mask.expand((b_sz, mask_dims[1], mask_dims[2]))?;
+                    expanded.unsqueeze(1)
+                }
+                2 => {
+                    let expanded = mask.expand((b_sz, mask_dims[0], mask_dims[1]))?;
+                    expanded.unsqueeze(1)
+                }
+                _ => candle_core::bail!("Unsupported mask tensor shape: {:?}", mask_dims),
+            }
+        } else {
+            Ok(mask)
+        }
     }
+}
+
+/// Repeats key/value tensors for Grouped Query Attention.
+fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
+    if n_rep == 1 {
+        return Ok(xs);
+    }
+
+    let (batch, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
+    Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((batch, num_kv_heads * n_rep, seq_len, head_dim))
 }
 
 /// Rotary Position Embedding (RoPE) implementation.
@@ -44,45 +86,24 @@ struct RoPE {
 }
 
 impl RoPE {
-    fn new(
-        dtype: DType,
-        head_dim: usize,
-        max_seq_len: usize,
-        theta: f64,
-        device: &Device,
-    ) -> Result<Self> {
-        let inv_freq: Vec<f32> = (0..head_dim)
+    fn new(head_dim: usize, rope_frequency: f32, device: &Device) -> Result<Self> {
+        let theta: Vec<_> = (0..head_dim)
             .step_by(2)
-            .map(|i| (1.0 / theta.powf(i as f64 / head_dim as f64)) as f32)
+            .map(|i| 1f32 / rope_frequency.powf(i as f32 / head_dim as f32))
             .collect();
-
-        // Compute the length first to avoid borrowing after move.
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?.to_dtype(dtype)?;
-        let positions = Tensor::arange(0u32, max_seq_len as u32, device)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let angles = positions.matmul(&inv_freq)?;
-
-        Ok(Self {
-            cos: angles.cos()?,
-            sin: angles.sin()?,
-        })
+        let theta = Tensor::new(theta.as_slice(), device)?;
+        let idx_theta = Tensor::arange(0f32, MAX_SEQ_LEN as f32, device)?
+            .reshape((MAX_SEQ_LEN, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let cos = idx_theta.cos()?;
+        let sin = idx_theta.sin()?;
+        Ok(Self { sin, cos })
     }
 
-    /// Apply rotary embeddings to query and key tensors.
-    /// Shape: (batch, num_heads, seq_len, head_dim)
     fn apply(&self, q: &Tensor, k: &Tensor, position_offset: usize) -> Result<(Tensor, Tensor)> {
-        let seq_len = q.dim(2)?;
-        let cos = self
-            .cos
-            .narrow(0, position_offset, seq_len)?
-            .to_dtype(q.dtype())?;
-        let sin = self
-            .sin
-            .narrow(0, position_offset, seq_len)?
-            .to_dtype(q.dtype())?;
-
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let cos = self.cos.narrow(0, position_offset, seq_len)?;
+        let sin = self.sin.narrow(0, position_offset, seq_len)?;
         let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
         let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
@@ -130,15 +151,16 @@ impl FeedForward {
 
 impl Module for FeedForward {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(x)?.apply(&Activation::Silu)?;
+        let gate = self.gate_proj.forward(x)?;
         let up = self.up_proj.forward(x)?;
-        let hidden = (gate * up)?;
-        self.down_proj.forward(&hidden)
+        let silu = candle_nn::ops::silu(&gate)?;
+        let gated = (silu * up)?;
+        self.down_proj.forward(&gated)
     }
 }
 
-/// Multi-head attention with Grouped Query Attention support.
-#[derive(Debug)]
+/// Multi-head attention with Grouped Query Attention and sliding window support.
+#[derive(Debug, Clone)]
 struct Attention {
     q_proj: QMatMul,
     k_proj: QMatMul,
@@ -149,6 +171,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    sliding_window_size: Option<usize>,
     rope: Arc<RoPE>,
 }
 
@@ -160,6 +183,7 @@ impl Attention {
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
+        sliding_window_size: Option<usize>,
         rope: Arc<RoPE>,
         rms_eps: f64,
         device: &Device,
@@ -212,6 +236,7 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
+            sliding_window_size,
             rope,
         })
     }
@@ -230,7 +255,7 @@ impl Attention {
             .q_proj
             .forward(hidden_states)?
             .reshape((batch, seq_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?; // (batch, num_heads, seq_len, head_dim)
+            .transpose(1, 2)?;
 
         let keys = self
             .k_proj
@@ -261,7 +286,6 @@ impl Attention {
 
         // Expand KV for Grouped Query Attention
         let num_groups = self.num_heads / self.num_kv_heads;
-
         let keys = repeat_kv(keys, num_groups)?.contiguous()?;
         let values = repeat_kv(values, num_groups)?.contiguous()?;
 
@@ -287,12 +311,14 @@ impl Attention {
 }
 
 /// Single transformer layer with pre-normalization.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TransformerLayer {
     attention: Attention,
     feed_forward: FeedForward,
     attention_norm: RmsNorm,
+    post_attention_norm: RmsNorm,
     ffn_norm: RmsNorm,
+    post_ffn_norm: RmsNorm,
 }
 
 impl TransformerLayer {
@@ -303,6 +329,7 @@ impl TransformerLayer {
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
+        sliding_window_size: Option<usize>,
         rope: Arc<RoPE>,
         rms_eps: f64,
         device: &Device,
@@ -316,6 +343,7 @@ impl TransformerLayer {
             num_heads,
             num_kv_heads,
             head_dim,
+            sliding_window_size,
             rope,
             rms_eps,
             device,
@@ -326,8 +354,20 @@ impl TransformerLayer {
             content.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
             rms_eps,
         )?;
+        let post_attention_norm = RmsNorm::from_qtensor(
+            content.tensor(
+                reader,
+                &format!("{prefix}.post_attention_norm.weight"),
+                device,
+            )?,
+            rms_eps,
+        )?;
         let ffn_norm = RmsNorm::from_qtensor(
             content.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+            rms_eps,
+        )?;
+        let post_ffn_norm = RmsNorm::from_qtensor(
+            content.tensor(reader, &format!("{prefix}.post_ffw_norm.weight"), device)?,
             rms_eps,
         )?;
 
@@ -335,7 +375,9 @@ impl TransformerLayer {
             attention,
             feed_forward,
             attention_norm,
+            post_attention_norm,
             ffn_norm,
+            post_ffn_norm,
         })
     }
 
@@ -346,23 +388,29 @@ impl TransformerLayer {
         position_offset: usize,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
-        // Pre-norm attention
-        let normed = self.attention_norm.forward(hidden_states)?;
+        // Attention block
+        let residual = hidden_states;
+        let hidden_states = self.attention_norm.forward(hidden_states)?;
         let attention_out =
             self.attention
-                .forward(&normed, attention_mask, position_offset, kv_cache)?;
-        let hidden_states = (hidden_states + attention_out)?;
+                .forward(&hidden_states, attention_mask, position_offset, kv_cache)?;
+        let hidden_states = self.post_attention_norm.forward(&attention_out)?;
+        let hidden_states = (hidden_states + residual)?;
 
-        // Pre-norm feed-forward
-        let normed = self.ffn_norm.forward(&hidden_states)?;
-        let ffn_out = self.feed_forward.forward(&normed)?;
-        hidden_states + ffn_out
+        // Feed-forward block
+        let residual = &hidden_states;
+        let hidden_states = self.ffn_norm.forward(&hidden_states)?;
+        let ffn_out = self.feed_forward.forward(&hidden_states)?;
+        let hidden_states = self.post_ffn_norm.forward(&ffn_out)?;
+        hidden_states + residual
     }
 }
 
 /// Shared model weights that can be used across multiple inference contexts.
+#[derive(Debug, Clone)]
 pub struct ModelWeights {
     embeddings: Embedding,
+    embedding_length: usize,
     layers: Vec<TransformerLayer>,
     final_norm: RmsNorm,
     output_projection: QMatMul,
@@ -378,7 +426,6 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        // Helper for metadata access
         let get_metadata = |key: &str| -> Result<&gguf_file::Value> {
             content
                 .metadata
@@ -387,14 +434,26 @@ impl ModelWeights {
         };
 
         // Parse model configuration
-        let num_heads = get_metadata("qwen3.attention.head_count")?.to_u32()? as usize;
-        let num_kv_heads = get_metadata("qwen3.attention.head_count_kv")?.to_u32()? as usize;
-        let head_dim = get_metadata("qwen3.attention.key_length")?.to_u32()? as usize;
-        let num_layers = get_metadata("qwen3.block_count")?.to_u32()? as usize;
-        let hidden_size = get_metadata("qwen3.embedding_length")?.to_u32()? as usize;
-        let max_seq_len = get_metadata("qwen3.context_length")?.to_u32()? as usize;
-        let rms_eps = get_metadata("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let rope_theta = get_metadata("qwen3.rope.freq_base")?.to_f32()? as f64;
+        let num_heads = get_metadata("gemma3.attention.head_count")?.to_u32()? as usize;
+        let num_kv_heads = get_metadata("gemma3.attention.head_count_kv")?.to_u32()? as usize;
+        let num_layers = get_metadata("gemma3.block_count")?.to_u32()? as usize;
+        let embedding_length = get_metadata("gemma3.embedding_length")?.to_u32()? as usize;
+        let head_dim = get_metadata("gemma3.attention.key_length")?.to_u32()? as usize;
+        let rms_eps = get_metadata("gemma3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+        let sliding_window_size =
+            get_metadata("gemma3.attention.sliding_window")?.to_u32()? as usize;
+
+        let sliding_window_type = get_metadata("gemma3.attention.sliding_window_type")
+            .and_then(|m| Ok(m.to_u32()? as usize))
+            .unwrap_or(DEFAULT_SLIDING_WINDOW_TYPE);
+
+        let rope_freq_base = get_metadata("gemma3.rope.freq_base")
+            .and_then(|m| m.to_f32())
+            .unwrap_or(DEFAULT_ROPE_FREQUENCY);
+
+        let rope_freq_base_sliding = get_metadata("gemma3.rope.local_freq_base")
+            .and_then(|m| m.to_f32())
+            .unwrap_or(DEFAULT_ROPE_FREQUENCY_SLIDING);
 
         let dtype = match content.metadata.get("general.dtype") {
             Some(v) => match v.to_u32().unwrap_or(1) {
@@ -407,26 +466,7 @@ impl ModelWeights {
 
         // Load embeddings
         let embed_tensor = content.tensor(reader, "token_embd.weight", device)?;
-        let embeddings = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
-
-        // Create RoPE
-        let rope = Arc::new(RoPE::new(dtype, head_dim, max_seq_len, rope_theta, device)?);
-
-        // Load transformer layers
-        let mut layers = Vec::with_capacity(num_layers);
-        for i in 0..num_layers {
-            layers.push(TransformerLayer::load(
-                &content,
-                reader,
-                i,
-                num_heads,
-                num_kv_heads,
-                head_dim,
-                rope.clone(),
-                rms_eps,
-                device,
-            )?);
-        }
+        let embeddings = Embedding::new(embed_tensor.dequantize(device)?, embedding_length);
 
         // Load final norm and output projection
         let final_norm = RmsNorm::from_qtensor(
@@ -436,139 +476,161 @@ impl ModelWeights {
 
         let output_tensor = content
             .tensor(reader, "output.weight", device)
-            .or_else(|_| content.tensor(reader, "token_embd.weight", device))?; // Fallback to tied weights
+            .or_else(|_| content.tensor(reader, "token_embd.weight", device))?;
         let output_projection = QMatMul::from_qtensor(output_tensor)?;
+
+        // Load transformer layers
+        let mut layers = Vec::with_capacity(num_layers);
+        for layer_idx in 0..num_layers {
+            // Determine sliding window configuration for this layer
+            let is_sliding = (layer_idx + 1) % sliding_window_type > 0;
+            let layer_sliding_window = is_sliding.then_some(sliding_window_size);
+            let layer_rope_frequency = if is_sliding {
+                rope_freq_base_sliding
+            } else {
+                rope_freq_base
+            };
+
+            let rope = Arc::new(RoPE::new(head_dim, layer_rope_frequency, device)?);
+
+            layers.push(TransformerLayer::load(
+                &content,
+                reader,
+                layer_idx,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                layer_sliding_window,
+                rope,
+                rms_eps,
+                device,
+            )?);
+        }
 
         Ok(Self {
             embeddings,
+            embedding_length,
             layers,
             final_norm,
             output_projection,
             device: device.clone(),
             dtype,
-            max_seq_len,
+            max_seq_len: MAX_SEQ_LEN,
         })
     }
 
-    /// Create a causal attention mask.
+    /// Create a causal attention mask with optional sliding window.
     fn create_causal_mask(
         &self,
         batch_size: usize,
         seq_len: usize,
         position_offset: usize,
+        sliding_window_size: Option<usize>,
     ) -> Result<Tensor> {
         let total_len = seq_len + position_offset;
 
         // Create position indices
-        let row_ids = Tensor::arange(0u32, seq_len as u32, &self.device)?
-            .to_dtype(DType::I64)?
-            .reshape((seq_len, 1))?
-            .broadcast_add(&Tensor::new(&[position_offset as i64], &self.device)?)?;
+        let row_ids = Tensor::arange(0f32, seq_len as f32, &self.device)?.reshape((seq_len, 1))?;
+        let col_ids =
+            Tensor::arange(0f32, total_len as f32, &self.device)?.reshape((1, total_len))?;
 
-        let col_ids = Tensor::arange(0u32, total_len as u32, &self.device)?
-            .to_dtype(DType::I64)?
-            .reshape((1, total_len))?;
+        // Add position offset to rows
+        let offset_tensor = Tensor::new(&[[position_offset as f32]], &self.device)?;
+        let current_pos = row_ids.broadcast_add(&offset_tensor)?;
 
-        // Create causal mask (can only attend to previous positions)
-        let mask = row_ids
-            .broadcast_as(&[seq_len, total_len])?
-            .ge(&col_ids.broadcast_as(&[seq_len, total_len])?)?;
+        // Create causal mask: j > (i + position_offset)
+        let causal_condition = col_ids.broadcast_gt(&current_pos)?;
+        let neg_inf_tensor = Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), &self.device)?;
+        let zeros_tensor = Tensor::zeros((seq_len, total_len), DType::F32, &self.device)?;
+        let mut mask = causal_condition.where_cond(&neg_inf_tensor, &zeros_tensor)?;
 
-        // Convert to float mask with -inf (F32) for masked positions
-        let neg_inf =
-            Tensor::new(&[f32::NEG_INFINITY], &self.device)?.broadcast_as(&[seq_len, total_len])?;
-        let zero = Tensor::zeros(&[seq_len, total_len], DType::F32, &self.device)?;
-
-        let float_mask = mask.where_cond(&zero, &neg_inf)?;
+        // Apply sliding window if specified
+        if let Some(window_size) = sliding_window_size {
+            let window_size_tensor = Tensor::new(&[[window_size as f32]], &self.device)?;
+            // Sliding window condition: (i + position_offset) > (j + window_size)
+            let sliding_condition =
+                current_pos.broadcast_gt(&col_ids.broadcast_add(&window_size_tensor)?)?;
+            let sliding_neg_inf =
+                Tensor::full(f32::NEG_INFINITY, (seq_len, total_len), &self.device)?;
+            let sliding_zeros = Tensor::zeros((seq_len, total_len), DType::F32, &self.device)?;
+            let sliding_mask = sliding_condition.where_cond(&sliding_neg_inf, &sliding_zeros)?;
+            mask = mask.maximum(&sliding_mask)?;
+        }
 
         // Add batch and head dimensions
-        float_mask
-            .unsqueeze(0)?
+        mask.unsqueeze(0)?
             .unsqueeze(0)?
             .broadcast_as(&[batch_size, 1, seq_len, total_len])
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Qwen3Size {
-    Size0_6B,
-    Size1_7B,
+pub enum Gemma3Size {
+    Size1B,
     Size4B,
-    Size8B,
-    Size14B,
-    Size32B,
+    Size12B,
+    Size27B,
 }
 
-impl Qwen3Size {
+impl Gemma3Size {
     pub fn to_id(&self) -> (String, String) {
         match self {
-            Qwen3Size::Size0_6B => (
-                "unsloth/Qwen3-0.6B-GGUF".into(),
-                "Qwen3-0.6B-Q4_K_M.gguf".into(),
+            Gemma3Size::Size1B => (
+                "unsloth/gemma-3-1b-it-GGUF".into(),
+                "gemma-3-1b-it-Q4_K_M.gguf".into(),
             ),
-            Qwen3Size::Size1_7B => (
-                "unsloth/Qwen3-1.7B-GGUF".into(),
-                "Qwen3-1.7B-Q4_K_M.gguf".into(),
+            Gemma3Size::Size4B => (
+                "unsloth/gemma-3-4b-it-GGUF".into(),
+                "gemma-3-4b-it-Q4_K_M.gguf".into(),
             ),
-            Qwen3Size::Size4B => (
-                "unsloth/Qwen3-4B-GGUF".into(),
-                "Qwen3-4B-Q4_K_M.gguf".into(),
+            Gemma3Size::Size12B => (
+                "unsloth/gemma-3-12b-it-GGUF".into(),
+                "gemma-3-12b-it-Q4_K_M.gguf".into(),
             ),
-            Qwen3Size::Size8B => (
-                "unsloth/Qwen3-8B-GGUF".into(),
-                "Qwen3-8B-Q4_K_M.gguf".into(),
-            ),
-            Qwen3Size::Size14B => (
-                "unsloth/Qwen3-14B-GGUF".into(),
-                "Qwen3-14B-Q4_K_M.gguf".into(),
-            ),
-            Qwen3Size::Size32B => (
-                "unsloth/Qwen3-32B-GGUF".into(),
-                "Qwen3-32B-Q4_K_M.gguf".into(),
+            Gemma3Size::Size27B => (
+                "unsloth/gemma-3-27b-it-GGUF".into(),
+                "gemma-3-27b-it-Q4_K_M.gguf".into(),
             ),
         }
     }
 }
 
-impl std::fmt::Display for Qwen3Size {
+impl std::fmt::Display for Gemma3Size {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            Qwen3Size::Size0_6B => "qwen3-0.6b",
-            Qwen3Size::Size1_7B => "qwen3-1.7b",
-            Qwen3Size::Size4B => "qwen3-4b",
-            Qwen3Size::Size8B => "qwen3-8b",
-            Qwen3Size::Size14B => "qwen3-14b",
-            Qwen3Size::Size32B => "qwen3-32b",
+            Gemma3Size::Size1B => "gemma3-1b",
+            Gemma3Size::Size4B => "gemma3-4b",
+            Gemma3Size::Size12B => "gemma3-12b",
+            Gemma3Size::Size27B => "gemma3-27b",
         };
         write!(f, "{}", name)
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for Qwen3Size {
+impl crate::utils::ModelOptions for Gemma3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
 }
 
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
+use tokenizers::Tokenizer;
 
-/// High-level Qwen3 model interface for text generation.
+/// High-level Gemma3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
 #[derive(Clone)]
-pub struct Qwen3Model {
+pub struct Gemma3Model {
     weights: Arc<ModelWeights>,
-    reasoning: bool,
-    generation_config: crate::loaders::GenerationConfig,
-    tools: Vec<crate::pipelines::text_generation_pipeline::text_generation_model::Tool>,
+    generation_config: crate::core::GenerationConfig,
     chat_template_env: Arc<Environment<'static>>,
 }
 
-impl Qwen3Model {
+impl Gemma3Model {
     /// Load and prepare the chat template environment
     async fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
         let tokenizer_config_loader =
-            crate::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
+            crate::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load().await?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
@@ -578,38 +640,16 @@ impl Qwen3Model {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing 'chat_template' field in tokenizer config"))?;
 
-        let mut chat_template_owned = chat_template_str.to_string();
-
-        // Replace Python list reverse slice with Jinja filter
-        chat_template_owned = chat_template_owned.replace("messages[::-1]", "messages|reverse");
-
-        // Patch known problematic arithmetic producing floats
-        chat_template_owned = chat_template_owned.replace(
-            "(messages|length - 1) - loop.index0",
-            "((messages|length - 1)|int - loop.index0|int)",
-        );
-
-        // Replace Python negative index access messages[-1] with explicit last element index
-        chat_template_owned =
-            chat_template_owned.replace("messages[-1]", "messages[(messages|length - 1)]");
-
-        // Build the MiniJinja environment with Python compatibility helpers
+        // Build the MiniJinja environment
         let mut env = Environment::new();
-        env.set_undefined_behavior(UndefinedBehavior::Lenient);
-
-        add_to_environment(&mut env);
-        env.set_unknown_method_callback(pycompat::unknown_method_callback);
-
-        // Ensure `tojson` filter is available (requires json feature)
-        env.add_filter("tojson", minijinja::filters::tojson);
 
         // Leak the string to get 'static lifetime - this is fine since we're storing it in the model
-        let chat_template_static = Box::leak(chat_template_owned.into_boxed_str());
+        let chat_template_static = Box::leak(chat_template_str.to_string().into_boxed_str());
         env.add_template("chat", chat_template_static)?;
 
         Ok(Arc::new(env))
     }
-    /// Load a Qwen3 model from a GGUF file.
+    /// Load a Gemma3 model from a GGUF file.
     pub async fn from_gguf<R: Read + Seek>(
         reader: &mut R,
         device: &Device,
@@ -617,7 +657,7 @@ impl Qwen3Model {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
         let generation_config = crate::loaders::GenerationConfigLoader::new(
-            "Qwen/Qwen3-0.6B",
+            "google/gemma-3-1b-it",
             "generation_config.json",
         )
         .load()
@@ -625,36 +665,30 @@ impl Qwen3Model {
         let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
-            reasoning: true,
             generation_config,
-            tools: Vec::new(),
             chat_template_env,
         })
     }
 
     /// Load the model from hf
-    pub async fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
+    pub async fn from_hf(device: &Device, size: Gemma3Size) -> anyhow::Result<Self> {
         let (repo_id, file_name) = size.to_id();
 
         // Download the model from hf
         let model_loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = model_loader.load().await?;
 
-        // Download the tokenizer config from hf to get the eos token id
+        let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
         let generation_config = crate::loaders::GenerationConfigLoader::new(
-            "Qwen/Qwen3-0.6B",
+            "google/gemma-3-1b-it",
             "generation_config.json",
         )
         .load()
         .await?;
-
-        let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
         let chat_template_env = Self::load_chat_template_env().await?;
         Ok(Self {
             weights,
-            reasoning: true,
             generation_config,
-            tools: Vec::new(),
             chat_template_env,
         })
     }
@@ -662,7 +696,7 @@ impl Qwen3Model {
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
         let tokenizer_loader =
-            TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+            TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
@@ -694,6 +728,7 @@ impl Qwen3Model {
 pub struct Context {
     weights: Arc<ModelWeights>,
     kv_caches: Vec<KvCache>,
+    mask_cache: HashMap<MaskCacheKey, CachedMask>,
     position: usize,
 }
 
@@ -708,6 +743,7 @@ impl Context {
         Self {
             weights,
             kv_caches,
+            mask_cache: HashMap::new(),
             position: 0,
         }
     }
@@ -722,8 +758,49 @@ impl Context {
         Self {
             weights,
             kv_caches,
+            mask_cache: HashMap::new(),
             position: 0,
         }
+    }
+
+    /// Get or create mask with caching
+    fn get_cached_mask(
+        &mut self,
+        seq_len: usize,
+        position_offset: usize,
+        sliding_window_size: Option<usize>,
+        target_dtype: DType,
+        batch_size: usize,
+    ) -> Result<Tensor> {
+        // Clear mask cache when starting a new sequence
+        if position_offset == 0 {
+            self.mask_cache.clear();
+        }
+
+        let cache_key = MaskCacheKey {
+            seq_len,
+            index_pos: position_offset,
+            sliding_window_size,
+        };
+
+        // Check if mask is in cache
+        if let Some(cached) = self.mask_cache.get(&cache_key) {
+            return cached.get_mask(target_dtype, batch_size);
+        }
+
+        // Create new mask
+        let mask = self.weights.create_causal_mask(
+            batch_size,
+            seq_len,
+            position_offset,
+            sliding_window_size,
+        )?;
+
+        // Cache the mask
+        let cached_mask = CachedMask { mask: mask.clone() };
+        self.mask_cache.insert(cache_key, cached_mask);
+
+        Ok(mask)
     }
 
     /// Generate next token logits given input token IDs.
@@ -740,21 +817,39 @@ impl Context {
         // Use current position as offset
         let position_offset = self.position;
 
-        // Embed input tokens
-        let mut hidden_states = self.weights.embeddings.forward(input_ids)?;
+        // Reset caches if starting new sequence
+        if position_offset == 0 {
+            for kv_cache in &mut self.kv_caches {
+                kv_cache.reset();
+            }
+            self.mask_cache.clear();
+        }
 
-        // Create attention mask (only needed for multi-token sequences)
-        let attention_mask = if seq_len > 1 {
-            Some(
-                self.weights
-                    .create_causal_mask(batch_size, seq_len, position_offset)?,
-            )
-        } else {
-            None
-        };
+        // Embed input tokens and scale
+        let mut hidden_states = self.weights.embeddings.forward(input_ids)?;
+        hidden_states = (hidden_states * (self.weights.embedding_length as f64).sqrt())?;
 
         // Forward pass through transformer layers
-        for (layer_idx, layer) in self.weights.layers.iter().enumerate() {
+        for layer_idx in 0..self.weights.layers.len() {
+            // First, fetch data we need from the layer **without** keeping a reference alive
+            let sliding_window_size = self.weights.layers[layer_idx].attention.sliding_window_size;
+
+            // Compute attention mask (needs &mut self)
+            let attention_mask = if seq_len > 1 {
+                Some(self.get_cached_mask(
+                    seq_len,
+                    position_offset,
+                    sliding_window_size,
+                    DType::F32,
+                    batch_size,
+                )?)
+            } else {
+                None
+            };
+
+            // Now safely borrow the layer immutably for the forward call.
+            let layer = &self.weights.layers[layer_idx];
+
             hidden_states = layer.forward(
                 &hidden_states,
                 attention_mask.as_ref(),
@@ -767,12 +862,8 @@ impl Context {
         hidden_states = self.weights.final_norm.forward(&hidden_states)?;
 
         // Extract last token and compute logits
-        let last_hidden = hidden_states.narrow(1, seq_len - 1, 1)?;
-        let logits = self
-            .weights
-            .output_projection
-            .forward(&last_hidden)?
-            .squeeze(1)?;
+        let last_hidden = hidden_states.i((.., seq_len - 1, ..))?;
+        let logits = self.weights.output_projection.forward(&last_hidden)?;
 
         // Update position after successful generation
         self.position += seq_len;
@@ -785,6 +876,7 @@ impl Context {
         for cache in &mut self.kv_caches {
             cache.reset();
         }
+        self.mask_cache.clear();
         self.position = 0;
     }
 
@@ -820,14 +912,16 @@ pub struct ModelInfo {
 
 /*
 
-Pipeline Stuff
+Pipeline stuff
 
 */
 
 use crate::pipelines::text_generation_pipeline::text_generation_model::{
-    LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
+    LanguageModelContext, TextGenerationModel,
 };
+use async_trait::async_trait;
 
+use minijinja::{context, Environment};
 
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {
@@ -850,9 +944,30 @@ impl LanguageModelContext for Context {
 }
 
 #[async_trait]
-impl TextGenerationModel for Qwen3Model {
-    type Context = crate::models::quantized_qwen3::Context;
-    type Options = Qwen3Size;
+impl TextGenerationModel for Gemma3Model {
+    type Options = Gemma3Size;
+    type Context = Context;
+
+    async fn new(options: Self::Options) -> anyhow::Result<Self> {
+        Gemma3Model::from_hf(&candle_core::Device::Cpu, options).await
+    }
+
+    async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        Gemma3Model::get_tokenizer(self).await
+    }
+
+    fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
+        // Render the template using the pre-loaded environment
+        let rendered = self
+            .chat_template_env
+            .get_template("chat")?
+            .render(context! {
+                messages => messages,
+                add_generation_prompt => true,
+            })?;
+
+        Ok(rendered)
+    }
 
     fn get_eos_token(&self) -> u32 {
         // Return the first EOS token ID from the generation config
@@ -872,59 +987,6 @@ impl TextGenerationModel for Qwen3Model {
         self.weights.max_seq_len
     }
 
-    async fn new(options: Self::Options) -> anyhow::Result<Self> {
-        Qwen3Model::from_hf(&candle_core::Device::Cpu, options).await
-    }
-
-    async fn get_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        Qwen3Model::get_tokenizer(self).await
-    }
-
-    fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
-        // Determine thinking mode
-        let mut enable_thinking = self.reasoning;
-        if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == "user") {
-            let content = last_user_msg.content();
-            if content.contains("/think") {
-                enable_thinking = true;
-            } else if content.contains("/no_think") {
-                enable_thinking = false;
-            }
-        }
-
-        // Prepare messages (strip /think flags from user content)
-        let messages_dicts: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|msg| {
-                let mut content = msg.content().to_string();
-                if msg.role() == "user" {
-                    content = content
-                        .replace("/think", "")
-                        .replace("/no_think", "")
-                        .trim()
-                        .to_string();
-                }
-                serde_json::json!({
-                    "role": msg.role(),
-                    "content": content,
-                })
-            })
-            .collect();
-
-        // Render the template using the pre-loaded environment
-        let rendered = self
-            .chat_template_env
-            .get_template("chat")?
-            .render(context! {
-                messages => messages_dicts,
-                add_generation_prompt => true,
-                enable_thinking => enable_thinking,
-                tools => self.registered_tools(),
-            })?;
-
-        Ok(rendered)
-    }
-
     fn new_context(&self) -> Context {
         Context::new(self.weights.clone())
     }
@@ -935,118 +997,17 @@ impl TextGenerationModel for Qwen3Model {
     }
 
     fn default_generation_params(&self) -> crate::models::generation::GenerationParams {
-        // Recommended Qwen3 inference settings (per official guidance)
+        // Recommended Gemma3 inference settings (confirmed with HF team)
         crate::models::generation::GenerationParams {
-            temperature: self.generation_config.temperature.unwrap_or(0.6),
-            repeat_penalty: self.generation_config.repeat_penalty.unwrap_or(1.1), // presence_penalty analogue
+            temperature: self.generation_config.temperature.unwrap_or(1.0),
+            repeat_penalty: self.generation_config.repeat_penalty.unwrap_or(1.15),
             repeat_last_n: self.generation_config.repeat_last_n.unwrap_or(64),
             seed: 42,
-            max_len: 2048, // Qwen3 context length
+            // Gemma3 supports very long context, but keep a sane default
+            max_len: 8192,
             top_p: self.generation_config.top_p.unwrap_or(0.95),
-            top_k: self.generation_config.top_k.unwrap_or(20) as usize,
+            top_k: self.generation_config.top_k.unwrap_or(64) as usize,
             min_p: self.generation_config.min_p.unwrap_or(0.0),
         }
     }
 }
-
-impl ToggleableReasoning for Qwen3Model {
-    fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()> {
-        self.reasoning = enable;
-        Ok(())
-    }
-}
-
-use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
-use crate::pipelines::text_generation_pipeline::tool_error::ToolError;
-use async_trait::async_trait;
-
-impl ToolCalling for Qwen3Model {
-    fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {
-        // Replace existing tool with same name if present
-        if let Some(pos) = self.tools.iter().position(|t| t.name() == tool.name()) {
-            self.tools[pos] = tool;
-        } else {
-            self.tools.push(tool);
-        }
-        Ok(())
-    }
-
-    fn unregister_tool(&mut self, name: &str) -> anyhow::Result<()> {
-        if let Some(pos) = self.tools.iter().position(|t| t.name() == name) {
-            self.tools.remove(pos);
-        }
-        Ok(())
-    }
-
-    fn clear_tools(&mut self) -> anyhow::Result<()> {
-        self.tools.clear();
-        Ok(())
-    }
-
-    fn registered_tools(&self) -> Vec<Tool> {
-        self.tools.clone()
-    }
-
-    fn call_tool(
-        &mut self,
-        tool_name: String,
-        parameters: std::collections::HashMap<String, String>,
-    ) -> std::result::Result<String, ToolError> {
-        if let Some(tool) = self.tools.iter().find(|t| t.name() == tool_name) {
-            tool.call(parameters)
-        } else {
-            Err(ToolError::Message(format!(
-                "Tool '{tool_name}' is not registered"
-            )))
-        }
-    }
-}
-
-/*
-use crate::utils::loaders::HfLoader;
-use minijinja::{context, Environment};
-use serde_json::Value;
-
-use crate::models::generate_tokens_from_prompt;
-use crate::pipelines::TextGenerationModel;
-use crate::Message;
-
-impl TextGenerationModel for Qwen3Model {
-    fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        let tokenizer = self.get_tokenizer()?;
-
-        Ok(tokenizer)
-    }
-
-    fn get_eos_token_str(&self) -> &str {
-        "<|im_end|>"
-    }
-
-    fn format_prompt(&self, prompt: &str) -> String {
-        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
-    }
-
-    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
-
-
-    fn prompt_with_tokens(
-        &self,
-        prompt_tokens: &[u32],
-        max_len: usize,
-        eos_token: u32,
-    ) -> anyhow::Result<Vec<u32>> {
-        let mut pipeline_state_guard = self.pipeline_state.write();
-
-        let response_tokens = generate_tokens_from_prompt(
-            prompt_tokens,
-            &self.config.params,
-            &mut *pipeline_state_guard,
-            max_len,
-            &self.config.device,
-            eos_token,
-        )?;
-
-        Ok(response_tokens)
-    }
-}
-*/

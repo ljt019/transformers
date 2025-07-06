@@ -1,6 +1,6 @@
 use super::fill_mask_model::FillMaskModel;
 use super::fill_mask_pipeline::FillMaskPipeline;
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::utils::{global_cache, ModelOptions};
 
 pub struct FillMaskPipelineBuilder<M: FillMaskModel> {
     options: M::Options,
@@ -50,8 +50,8 @@ impl<M: FillMaskModel> FillMaskPipelineBuilder<M> {
     }
 }
 
-impl FillMaskPipelineBuilder<crate::models::modernbert::FillMaskModernBertModel> {
-    pub fn modernbert(size: crate::models::modernbert::ModernBertSize) -> Self {
+impl FillMaskPipelineBuilder<crate::models::implementations::modernbert::FillMaskModernBertModel> {
+    pub fn modernbert(size: crate::models::ModernBertSize) -> Self {
         Self::new(size)
     }
 }

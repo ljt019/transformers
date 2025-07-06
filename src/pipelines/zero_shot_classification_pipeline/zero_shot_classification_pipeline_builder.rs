@@ -1,6 +1,6 @@
 use super::zero_shot_classification_model::ZeroShotClassificationModel;
 use super::zero_shot_classification_pipeline::ZeroShotClassificationPipeline;
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::utils::{global_cache, ModelOptions};
 
 pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel> {
     options: M::Options,
@@ -50,8 +50,8 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
     }
 }
 
-impl ZeroShotClassificationPipelineBuilder<crate::models::modernbert::ZeroShotModernBertModel> {
-    pub fn modernbert(size: crate::models::modernbert::ModernBertSize) -> Self {
+impl ZeroShotClassificationPipelineBuilder<crate::models::implementations::modernbert::ZeroShotModernBertModel> {
+    pub fn modernbert(size: crate::models::ModernBertSize) -> Self {
         Self::new(size)
     }
 }

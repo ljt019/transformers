@@ -1,6 +1,6 @@
 use super::sentiment_analysis_model::SentimentAnalysisModel;
 use super::sentiment_analysis_pipeline::SentimentAnalysisPipeline;
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::utils::{global_cache, ModelOptions};
 
 pub struct SentimentAnalysisPipelineBuilder<M: SentimentAnalysisModel> {
     options: M::Options,
@@ -50,8 +50,8 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
     }
 }
 
-impl SentimentAnalysisPipelineBuilder<crate::models::modernbert::SentimentModernBertModel> {
-    pub fn modernbert(size: crate::models::modernbert::ModernBertSize) -> Self {
+impl SentimentAnalysisPipelineBuilder<crate::models::implementations::modernbert::SentimentModernBertModel> {
+    pub fn modernbert(size: crate::models::ModernBertSize) -> Self {
         Self::new(size)
     }
 }
