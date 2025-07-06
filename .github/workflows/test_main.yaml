@@ -1,16 +1,18 @@
-name: Test
+name: Test Main
 
 on:
   pull_request_target:
     types:
       - opened
+      - synchronize
+      - reopened
     branches:
-      - dev
+      - main
 
 
 jobs:
   test: 
-    name: Run Tests 
+    name: Run Tests Main
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

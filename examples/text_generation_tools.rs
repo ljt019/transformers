@@ -1,6 +1,7 @@
 use anyhow::Result;
 use transformers::pipelines::text_generation_pipeline::ToolError;
 use transformers::pipelines::text_generation_pipeline::*;
+use std::io::Write;
 
 #[tool(on_error = ErrorStrategy::Fail, retries = 5)]
 /// Get the weather for a given city.
@@ -27,17 +28,36 @@ async fn main() -> Result<()> {
 
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
         .max_len(8192)
-        .build()?;
+        .build()
+        .await?;
 
     println!("Pipeline built successfully.");
 
-    pipeline.register_tools(tools![get_temperature, get_humidity])?;
+    pipeline.register_tools(tools![get_temperature, get_humidity]).await?;
 
     let mut stream =
-        pipeline.completion_stream_with_tools("What's the weather like in Tokyo?")?;
+        pipeline
+            .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
+            .await?;
+
+    println!("Generating text 1...");
 
     while let Some(tok) = stream.next().await {
-        print!("{}", tok);
+        print!("{}", tok?);
+        std::io::stdout().flush().unwrap();
+    }
+
+    pipeline.unregister_tools(tools![get_temperature]).await?;
+
+    let mut stream =
+        pipeline
+            .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
+            .await?;
+
+    println!("Generating text 2...");
+
+    while let Some(tok) = stream.next().await {
+        print!("{}", tok?);
         std::io::stdout().flush().unwrap();
     }
 

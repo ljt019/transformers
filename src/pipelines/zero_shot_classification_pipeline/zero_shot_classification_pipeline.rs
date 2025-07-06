@@ -25,4 +25,8 @@ impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipeline<M> {
         self.model
             .predict_multi_label(&self.tokenizer, text, candidate_labels)
     }
+
+    pub fn device(&self) -> &candle_core::Device {
+        self.model.device()
+    }
 }

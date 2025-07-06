@@ -10,4 +10,8 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipeline<M> {
     pub fn predict(&self, text: &str) -> anyhow::Result<String> {
         self.model.predict(&self.tokenizer, text)
     }
+
+    pub fn device(&self) -> &candle_core::Device {
+        self.model.device()
+    }
 }

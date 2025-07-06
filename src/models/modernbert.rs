@@ -621,7 +621,6 @@ pub struct ModelInfo {
 Pipeline Implementations
 */
 
-use crate::pipelines::utils::load_device;
 use anyhow::{Error as E, Result as AnyhowResult};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -633,6 +632,22 @@ pub enum ModernBertSize {
     Large,
 }
 
+impl std::fmt::Display for ModernBertSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            ModernBertSize::Base => "modernbert-base",
+            ModernBertSize::Large => "modernbert-large",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// Fill-mask model using ModernBERT.
 #[derive(Clone)]
 pub struct FillMaskModernBertModel {
@@ -641,8 +656,7 @@ pub struct FillMaskModernBertModel {
 }
 
 impl FillMaskModernBertModel {
-    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
-        let device = load_device()?;
+    pub fn new(size: ModernBertSize, device: Device) -> AnyhowResult<Self> {
         let model_id = match size {
             ModernBertSize::Base => "answerdotai/ModernBERT-base".to_string(),
             ModernBertSize::Large => "answerdotai/ModernBERT-large".to_string(),
@@ -692,6 +706,10 @@ impl FillMaskModernBertModel {
         let model = ModernBertForMaskedLM::load(vb, &config)?;
 
         Ok(Self { model, device })
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 
     pub fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
@@ -746,8 +764,8 @@ impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options) -> anyhow::Result<Self> {
-        FillMaskModernBertModel::new(options)
+    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        FillMaskModernBertModel::new(options, device)
     }
 
     fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
@@ -756,6 +774,10 @@ impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel
 
     fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
         Self::get_tokenizer(options)
+    }
+
+    fn device(&self) -> &Device {
+        self.device()
     }
 }
 
@@ -768,8 +790,7 @@ pub struct ZeroShotModernBertModel {
 }
 
 impl ZeroShotModernBertModel {
-    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
-        let device = load_device()?;
+    pub fn new(size: ModernBertSize, device: Device) -> AnyhowResult<Self> {
 
         let model_id = match size {
             ModernBertSize::Base => "MoritzLaurer/ModernBERT-base-zeroshot-v2.0".to_string(),
@@ -852,6 +873,10 @@ impl ZeroShotModernBertModel {
             device,
             label2id,
         })
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 
     pub fn predict(
@@ -999,8 +1024,8 @@ impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classificati
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options) -> anyhow::Result<Self> {
-        ZeroShotModernBertModel::new(options)
+    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        ZeroShotModernBertModel::new(options, device)
     }
 
     fn predict(
@@ -1029,6 +1054,10 @@ impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classificati
         Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
     }
+
+    fn device(&self) -> &Device {
+        self.device()
+    }
 }
 
 /// Sentiment analysis model using ModernBERT
@@ -1040,8 +1069,7 @@ pub struct SentimentModernBertModel {
 }
 
 impl SentimentModernBertModel {
-    pub fn new(size: ModernBertSize) -> AnyhowResult<Self> {
-        let device = load_device()?;
+    pub fn new(size: ModernBertSize, device: Device) -> AnyhowResult<Self> {
 
         let model_id = match size {
             ModernBertSize::Base => "clapAI/modernBERT-base-multilingual-sentiment".to_string(),
@@ -1124,6 +1152,10 @@ impl SentimentModernBertModel {
         })
     }
 
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
     pub fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
         // Tokenize
         let tokens = tokenizer
@@ -1184,8 +1216,8 @@ impl crate::pipelines::sentiment_analysis_pipeline::sentiment_analysis_model::Se
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options) -> anyhow::Result<Self> {
-        SentimentModernBertModel::new(options)
+    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        SentimentModernBertModel::new(options, device)
     }
 
     fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
@@ -1199,5 +1231,9 @@ impl crate::pipelines::sentiment_analysis_pipeline::sentiment_analysis_model::Se
         let tokenizer_filename = repo.get("tokenizer.json")?;
         Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))
+    }
+
+    fn device(&self) -> &Device {
+        self.device()
     }
 }

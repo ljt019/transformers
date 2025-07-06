@@ -1,17 +1,6 @@
-#![allow(warnings)]
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
-
 mod loaders;
 mod models;
 pub mod pipelines;
-
-pub(crate) const DEFAULT_TEMPERATURE: f64 = 0.7;
-pub(crate) const DEFAULT_REPEAT_PENALTY: f32 = 1.1;
-pub(crate) const DEFAULT_REPEAT_LAST_N: usize = 64;
-pub(crate) const DEFAULT_SEED: u64 = 299792458;
 
 // Re-export the `#[tool]` procedural macro so users can simply write
 // `use transformers::tool;` and annotate their functions without adding an
@@ -119,5 +108,54 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
             .iter()
             .find(|message| message.role() == "system")
             .map(|msg| msg.content())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_message_vec_ext_last_user() {
+        let messages = vec![
+            Message::system("You are helpful"),
+            Message::user("First question"),
+            Message::assistant("First answer"),
+            Message::user("Second question"),
+        ];
+
+        assert_eq!(messages.last_user(), Some("Second question"));
+    }
+
+    #[test]
+    fn test_message_vec_ext_last_assistant() {
+        let messages = vec![
+            Message::system("You are helpful"),
+            Message::user("Question"),
+            Message::assistant("First answer"),
+            Message::user("Follow up"),
+            Message::assistant("Second answer"),
+        ];
+
+        assert_eq!(messages.last_assistant(), Some("Second answer"));
+    }
+
+    #[test]
+    fn test_message_vec_ext_system() {
+        let messages = vec![
+            Message::system("You are helpful"),
+            Message::user("Question"),
+            Message::assistant("Answer"),
+        ];
+
+        assert_eq!(messages.system(), Some("You are helpful"));
+    }
+
+    #[test]
+    fn test_message_vec_ext_empty() {
+        let messages: Vec<Message> = vec![];
+        assert_eq!(messages.last_user(), None);
+        assert_eq!(messages.last_assistant(), None);
+        assert_eq!(messages.system(), None);
     }
 }

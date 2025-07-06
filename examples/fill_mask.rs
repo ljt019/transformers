@@ -1,10 +1,13 @@
 use anyhow::Result;
 use transformers::pipelines::fill_mask_pipeline::*;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("Building pipeline...");
 
-    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base).build()?;
+    let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base)
+        .build()
+        .await?;
 
     println!("Pipeline built successfully.");
 

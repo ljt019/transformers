@@ -1,9 +1,13 @@
 use crate::models::quantized_gemma3::{Gemma3Model, Gemma3Size};
 use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::model_cache::global_cache;
+use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::pipelines::utils::load_device_with;
 
 use super::text_generation_model::TextGenerationModel;
 use super::text_generation_pipeline::TextGenerationPipeline;
+use super::xml_generation_pipeline::XmlGenerationPipeline;
+use super::xml_parser::XmlParserBuilder;
+use candle_core::{CudaDevice, Device};
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -15,6 +19,14 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     top_p: Option<f64>,
     top_k: Option<usize>,
     min_p: Option<f64>,
+    device_request: DeviceRequest,
+}
+
+enum DeviceRequest {
+    Default,
+    Cpu,
+    Cuda(usize),
+    Explicit(Device),
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
@@ -29,6 +41,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             top_p: None,
             top_k: None,
             min_p: None,
+            device_request: DeviceRequest::Default,
         }
     }
 
@@ -72,14 +85,73 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
+    /// Force the pipeline to use CPU even if CUDA is available.
+    pub fn cpu(mut self) -> Self {
+        self.device_request = DeviceRequest::Cpu;
+        self
+    }
+
+    /// Select a specific CUDA device by index.
+    pub fn cuda_device(mut self, index: usize) -> Self {
+        self.device_request = DeviceRequest::Cuda(index);
+        self
+    }
+
+    /// Provide a preconstructed device.
+    pub fn device(mut self, device: Device) -> Self {
+        self.device_request = DeviceRequest::Explicit(device);
+        self
+    }
+
+    pub async fn build(self) -> anyhow::Result<TextGenerationPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
-        M::Options: std::fmt::Display,
+        M::Options: ModelOptions + Clone,
     {
         // Always use the global cache to share models
-        let cache_key = format!("{}", self.model_options);
-        let model = global_cache().get_or_create(&cache_key, || Ok(M::new(self.model_options)))?;
+        let cache_key = self.model_options.cache_key();
+        let model = global_cache()
+            .get_or_create_async(&cache_key, || async {
+                M::new(self.model_options.clone()).await
+            })
+            .await?;
+
+        // Start with model-specific defaults
+        let default_params = model.default_generation_params();
+
+        // Override with any user-specified values
+        let gen_params = crate::models::generation::GenerationParams::new(
+            self.temperature.unwrap_or(default_params.temperature),
+            self.repeat_penalty.unwrap_or(default_params.repeat_penalty),
+            self.repeat_last_n.unwrap_or(default_params.repeat_last_n),
+            self.seed.unwrap_or_else(|| rand::random::<u64>()),
+            self.max_len.unwrap_or(default_params.max_len),
+            self.top_p.unwrap_or(default_params.top_p),
+            self.top_k.unwrap_or(default_params.top_k),
+            self.min_p.unwrap_or(default_params.min_p),
+        );
+        let device = match self.device_request {
+            DeviceRequest::Default => load_device_with(None)?,
+            DeviceRequest::Cpu => Device::Cpu,
+            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
+            DeviceRequest::Explicit(d) => d,
+        };
+
+        TextGenerationPipeline::new(model, gen_params, device).await
+    }
+
+    pub async fn build_xml(self, tags: &[&str]) -> anyhow::Result<XmlGenerationPipeline<M>>
+    where
+        M: Clone + Send + Sync + 'static,
+        M::Options: ModelOptions + Clone,
+    {
+        // Always use the global cache to share models
+        let cache_key = self.model_options.cache_key();
+        let model = global_cache()
+            .get_or_create_async(&cache_key, || async {
+                M::new(self.model_options.clone()).await
+            })
+            .await?;
 
         // Start with model-specific defaults
         let default_params = model.default_generation_params();
@@ -96,7 +168,19 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.min_p.unwrap_or(default_params.min_p),
         );
 
-        Ok(TextGenerationPipeline::new(model, gen_params)?)
+        let mut builder = XmlParserBuilder::new();
+        for tag in tags {
+            builder.register_tag(*tag);
+        }
+        let xml_parser = builder.build();
+        let device = match self.device_request {
+            DeviceRequest::Default => load_device_with(None)?,
+            DeviceRequest::Cpu => Device::Cpu,
+            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
+            DeviceRequest::Explicit(d) => d,
+        };
+
+        XmlGenerationPipeline::new(model, gen_params, xml_parser, device).await
     }
 }
 

@@ -1,4 +1,4 @@
-use hf_hub::api::sync::Api as HfApi;
+use hf_hub::api::tokio::Api as HfApi;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
@@ -16,17 +16,34 @@ impl HfLoader {
         }
     }
 
-    pub fn load(&self) -> anyhow::Result<PathBuf> {
-        let file_path = {
-            let hf_api = HfApi::new()?;
-            let hf_repo = self.repo.clone();
+    pub async fn load(&self) -> anyhow::Result<PathBuf> {
+        let hf_api = HfApi::new()?;
+        let hf_repo = self.repo.clone();
+        let hf_api = hf_api.model(hf_repo);
 
-            let hf_api = hf_api.model(hf_repo);
+        // Retry logic for lock acquisition failures
+        let max_retries = 3;
+        let mut last_error = None;
 
-            hf_api.get(self.filename.as_str())?
-        };
+        for attempt in 0..max_retries {
+            match hf_api.get(self.filename.as_str()).await {
+                Ok(path) => return Ok(path),
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Lock acquisition failed") && attempt < max_retries - 1 {
+                        // Wait before retrying, with exponential backoff
+                        let wait_time = std::time::Duration::from_millis(100 * (1 << attempt));
+                        tokio::time::sleep(wait_time).await;
+                        last_error = Some(e);
+                        continue;
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
 
-        return Ok(file_path);
+        // If we exhausted all retries, return the last error
+        Err(last_error.unwrap().into())
     }
 }
 
@@ -44,8 +61,8 @@ impl TokenizerLoader {
         }
     }
 
-    pub fn load(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_file_path = self.tokenizer_file_loader.load()?;
+    pub async fn load(&self) -> anyhow::Result<Tokenizer> {
+        let tokenizer_file_path = self.tokenizer_file_loader.load().await?;
 
         let tokenizer =
             tokenizers::Tokenizer::from_file(tokenizer_file_path).map_err(anyhow::Error::msg)?;
@@ -78,10 +95,14 @@ impl GenerationConfigLoader {
         }
     }
 
-    pub fn load(&self) -> anyhow::Result<GenerationConfig> {
-        let generation_config_file_path = self.generation_config_file_loader.load()?;
+    pub async fn load(&self) -> anyhow::Result<GenerationConfig> {
+        let generation_config_file_path = self
+            .generation_config_file_loader
+            .load()
+            .await?;
 
-        let generation_config_content = std::fs::read_to_string(generation_config_file_path)?;
+        let generation_config_content =
+            std::fs::read_to_string(generation_config_file_path)?;
 
         let config_json: serde_json::Value = serde_json::from_str(&generation_config_content)?;
 
@@ -131,51 +152,6 @@ impl GenerationConfigLoader {
     }
 }
 
-pub struct TokenizerConfig {
-    pub chat_template: String,
-    pub special_tokens: Vec<String>,
-}
-
-pub struct TokenizerConfigLoader {
-    pub tokenizer_config_file_loader: HfLoader,
-}
-
-impl TokenizerConfigLoader {
-    pub fn new(repo: &str, filename: &str) -> Self {
-        let tokenizer_config_file_loader = HfLoader::new(repo, filename);
-
-        Self {
-            tokenizer_config_file_loader,
-        }
-    }
-
-    pub fn load(&self) -> anyhow::Result<TokenizerConfig> {
-        let tokenizer_config_file_path = self.tokenizer_config_file_loader.load()?;
-
-        let file = std::fs::File::open(tokenizer_config_file_path)?;
-        let config_json: serde_json::Value = serde_json::from_reader(file)?;
-
-        let chat_template = config_json["chat_template"].as_str().unwrap_or("");
-
-        let special_tokens = config_json["additional_special_tokens"]
-            .as_array()
-            .expect("Couldn't find special tokens")
-            .iter()
-            .map(|token| {
-                token
-                    .as_str()
-                    .expect("Couldn't find special tokens")
-                    .to_string()
-            })
-            .collect::<Vec<String>>();
-
-        Ok(TokenizerConfig {
-            chat_template: chat_template.to_string(),
-            special_tokens,
-        })
-    }
-}
-
 #[derive(Clone)]
 pub struct GgufModelLoader {
     pub model_file_loader: HfLoader,
@@ -188,10 +164,10 @@ impl GgufModelLoader {
         Self { model_file_loader }
     }
 
-    pub fn load(
+    pub async fn load(
         &self,
     ) -> anyhow::Result<(std::fs::File, candle_core::quantized::gguf_file::Content)> {
-        let model_file_path = self.model_file_loader.load()?;
+        let model_file_path = self.model_file_loader.load().await?;
 
         let mut file = std::fs::File::open(&model_file_path)?;
         let file_content = candle_core::quantized::gguf_file::Content::read(&mut file)
