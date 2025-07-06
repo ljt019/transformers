@@ -1,6 +1,6 @@
 pub mod core;
 mod loaders;
-mod models;
+pub mod models;
 pub mod pipelines;
 
 // Re-export the `#[tool]` procedural macro so users can simply write
@@ -14,3 +14,8 @@ pub use tool_macro::tool;
 
 // Re-export core types
 pub use core::{Message, MessageVecExt};
+
+// Re-export model types for easier access
+pub use models::implementations::{
+    Gemma3Model, Gemma3Size, ModernBertModel, ModernBertSize, Qwen3Model, Qwen3Size,
+};
