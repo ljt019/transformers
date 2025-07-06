@@ -544,7 +544,7 @@ impl std::fmt::Display for Qwen3Size {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for Qwen3Size {
+impl crate::utils::cache::ModelOptions for Qwen3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -558,8 +558,8 @@ use crate::loaders::{GgufModelLoader, TokenizerLoader};
 pub struct Qwen3Model {
     weights: Arc<ModelWeights>,
     reasoning: bool,
-    generation_config: crate::loaders::GenerationConfig,
-    tools: Vec<crate::pipelines::text_generation_pipeline::text_generation_model::Tool>,
+    generation_config: crate::core::GenerationConfig,
+    tools: Vec<crate::pipelines::text_generation::text_generation_model::Tool>,
     chat_template_env: Arc<Environment<'static>>,
 }
 
@@ -824,7 +824,7 @@ Pipeline Stuff
 
 */
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::{
+use crate::pipelines::text_generation::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
@@ -956,8 +956,8 @@ impl ToggleableReasoning for Qwen3Model {
     }
 }
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
-use crate::pipelines::text_generation_pipeline::tool_error::ToolError;
+use crate::pipelines::text_generation::text_generation_model::Tool;
+use crate::pipelines::text_generation::tool_error::ToolError;
 use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {

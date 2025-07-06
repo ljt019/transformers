@@ -1,4 +1,4 @@
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 #[tool]
 fn echo(msg: String) -> String {

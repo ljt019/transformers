@@ -607,7 +607,7 @@ impl std::fmt::Display for Gemma3Size {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for Gemma3Size {
+impl crate::utils::cache::ModelOptions for Gemma3Size {
     fn cache_key(&self) -> String {
         self.to_string()
     }
@@ -621,7 +621,7 @@ use tokenizers::Tokenizer;
 #[derive(Clone)]
 pub struct Gemma3Model {
     weights: Arc<ModelWeights>,
-    generation_config: crate::loaders::GenerationConfig,
+    generation_config: crate::core::GenerationConfig,
     chat_template_env: Arc<Environment<'static>>,
 }
 
@@ -916,7 +916,7 @@ Pipeline stuff
 
 */
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::{
+use crate::pipelines::text_generation::text_generation_model::{
     LanguageModelContext, TextGenerationModel,
 };
 use async_trait::async_trait;

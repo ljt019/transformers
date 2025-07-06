@@ -1,7 +1,7 @@
 // Integration tests for tool error handling
 // This is a separate crate that tests the public API
 
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 #[tool(on_error = ErrorStrategy::Fail, retries = 1)]
 fn fail_tool() -> Result<String, ToolError> {

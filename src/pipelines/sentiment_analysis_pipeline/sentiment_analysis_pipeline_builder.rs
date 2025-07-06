@@ -1,6 +1,6 @@
 use super::sentiment_analysis_model::SentimentAnalysisModel;
 use super::sentiment_analysis_pipeline::SentimentAnalysisPipeline;
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
+use crate::utils::cache::{global_cache, ModelOptions};
 
 pub struct SentimentAnalysisPipelineBuilder<M: SentimentAnalysisModel> {
     options: M::Options,
@@ -39,7 +39,7 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
     {
         let device = match self.device {
             Some(d) => d,
-            None => crate::pipelines::utils::load_device()?,
+            None => crate::utils::load_device()?,
         };
         let key = format!("{}-{:?}", self.options.cache_key(), device.location());
         let model = global_cache()

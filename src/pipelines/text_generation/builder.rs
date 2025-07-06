@@ -1,10 +1,10 @@
 use crate::models::quantized_gemma3::{Gemma3Model, Gemma3Size};
 use crate::models::quantized_qwen3::{Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::model_cache::{global_cache, ModelOptions};
-use crate::pipelines::utils::load_device_with;
+use crate::utils::cache::{global_cache, ModelOptions};
+use crate::utils::load_device_with;
 
 use super::text_generation_model::TextGenerationModel;
-use super::text_generation_pipeline::TextGenerationPipeline;
+use super::pipeline::TextGenerationPipeline;
 use super::xml_generation_pipeline::XmlGenerationPipeline;
 use super::xml_parser::XmlParserBuilder;
 use candle_core::{CudaDevice, Device};

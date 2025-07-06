@@ -642,7 +642,7 @@ impl std::fmt::Display for ModernBertSize {
     }
 }
 
-impl crate::pipelines::utils::model_cache::ModelOptions for ModernBertSize {
+impl crate::utils::cache::ModelOptions for ModernBertSize {
     fn cache_key(&self) -> String {
         self.to_string()
     }

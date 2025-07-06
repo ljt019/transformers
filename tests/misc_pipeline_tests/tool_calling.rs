@@ -1,7 +1,7 @@
 // Integration tests for tool calling functionality
 // This is a separate crate that tests the public API
 
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 #[tool]
 fn get_weather(city: String) -> Result<String, ToolError> {

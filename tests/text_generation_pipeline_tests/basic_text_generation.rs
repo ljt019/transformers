@@ -2,7 +2,7 @@
 // This is a separate crate that tests the public API
 
 use futures::StreamExt;
-use transformers::pipelines::text_generation_pipeline::*;
+use transformers::pipelines::text_generation::*;
 
 #[tokio::test]
 async fn basic_text_generation() -> anyhow::Result<()> {
