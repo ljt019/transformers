@@ -1,5 +1,4 @@
 pub mod core;
-mod loaders;
 mod models;
 pub mod pipelines;
 pub mod utils;

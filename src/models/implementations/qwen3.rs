@@ -550,7 +550,7 @@ impl crate::utils::cache::ModelOptions for Qwen3Size {
     }
 }
 
-use crate::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
 
 /// High-level Qwen3 model interface for text generation.
 /// This struct manages the shared weights and creates individual contexts.
@@ -568,7 +568,7 @@ impl Qwen3Model {
     async fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
         let tokenizer_config_loader =
-            crate::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
+            crate::utils::loaders::HfLoader::new("Qwen/Qwen3-0.6B", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load().await?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
@@ -616,7 +616,7 @@ impl Qwen3Model {
     ) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
-        let generation_config = crate::loaders::GenerationConfigLoader::new(
+        let generation_config = crate::utils::loaders::GenerationConfigLoader::new(
             "Qwen/Qwen3-0.6B",
             "generation_config.json",
         )
@@ -641,7 +641,7 @@ impl Qwen3Model {
         let (mut file, content) = model_loader.load().await?;
 
         // Download the tokenizer config from hf to get the eos token id
-        let generation_config = crate::loaders::GenerationConfigLoader::new(
+        let generation_config = crate::utils::loaders::GenerationConfigLoader::new(
             "Qwen/Qwen3-0.6B",
             "generation_config.json",
         )
@@ -661,8 +661,7 @@ impl Qwen3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
@@ -827,7 +826,6 @@ Pipeline Stuff
 use crate::pipelines::text_generation::text_generation_model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
-
 
 impl LanguageModelContext for Context {
     fn generate(&mut self, input: &Tensor) -> candle_core::Result<Tensor> {

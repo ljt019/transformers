@@ -613,7 +613,7 @@ impl crate::utils::cache::ModelOptions for Gemma3Size {
     }
 }
 
-use crate::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::utils::loaders::{GgufModelLoader, TokenizerLoader};
 use tokenizers::Tokenizer;
 
 /// High-level Gemma3 model interface for text generation.
@@ -630,7 +630,7 @@ impl Gemma3Model {
     async fn load_chat_template_env() -> anyhow::Result<Arc<Environment<'static>>> {
         // Load the tokenizer config and extract the chat template
         let tokenizer_config_loader =
-            crate::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
+            crate::utils::loaders::HfLoader::new("google/gemma-3-1b-it", "tokenizer_config.json");
 
         let tokenizer_config_path = tokenizer_config_loader.load().await?;
         let tokenizer_config_content = std::fs::read_to_string(tokenizer_config_path)?;
@@ -656,7 +656,7 @@ impl Gemma3Model {
     ) -> anyhow::Result<Self> {
         let content = gguf_file::Content::read(reader)?;
         let weights = Arc::new(ModelWeights::from_gguf(content, reader, device)?);
-        let generation_config = crate::loaders::GenerationConfigLoader::new(
+        let generation_config = crate::utils::loaders::GenerationConfigLoader::new(
             "google/gemma-3-1b-it",
             "generation_config.json",
         )
@@ -679,7 +679,7 @@ impl Gemma3Model {
         let (mut file, content) = model_loader.load().await?;
 
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
-        let generation_config = crate::loaders::GenerationConfigLoader::new(
+        let generation_config = crate::utils::loaders::GenerationConfigLoader::new(
             "google/gemma-3-1b-it",
             "generation_config.json",
         )
@@ -695,8 +695,7 @@ impl Gemma3Model {
 
     /// Get the models suggested tokenizer
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_loader =
-            TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
+        let tokenizer_loader = TokenizerLoader::new("google/gemma-3-1b-it", "tokenizer.json");
         let tokenizer = tokenizer_loader.load().await?;
         Ok(tokenizer)
     }
