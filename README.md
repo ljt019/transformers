@@ -236,7 +236,6 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // 3. Do something with tokens as they are generated
-    futures::pin_mut!(stream);
     while let Some(tok) = stream.next().await {
         print!("{}", tok);
         std::io::stdout().flush().unwrap();

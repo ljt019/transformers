@@ -7,13 +7,13 @@ use pin_project_lite::pin_project;
 pin_project! {
     pub struct CompletionStream<S> {
         #[pin]
-        inner: S,
+        inner: Pin<Box<S>>,
     }
 }
 
 impl<S> CompletionStream<S> {
     pub(crate) fn new(inner: S) -> Self {
-        Self { inner }
+        Self { inner: Box::pin(inner) }
     }
 
     /// Collect the entire stream into a single `String`.
@@ -21,11 +21,9 @@ impl<S> CompletionStream<S> {
     where
         S: Stream<Item = anyhow::Result<String>>,
     {
-        use futures::{StreamExt, pin_mut};
-        let mut inner = self.inner;
-        pin_mut!(inner);
+        use futures::StreamExt;
         let mut out = String::new();
-        while let Some(chunk) = inner.next().await {
+        while let Some(chunk) = self.inner.as_mut().next().await {
             out.push_str(&chunk?);
         }
         Ok(out)
@@ -39,12 +37,10 @@ impl<S> CompletionStream<S> {
     where
         S: Stream<Item = anyhow::Result<String>>,
     {
-        use futures::{StreamExt, pin_mut};
-        let mut inner = self.inner;
-        pin_mut!(inner);
+        use futures::StreamExt;
         let mut out = Vec::new();
         for _ in 0..n {
-            match inner.next().await {
+            match self.inner.as_mut().next().await {
                 Some(chunk) => out.push(chunk?),
                 None => break,
             }
@@ -60,7 +56,7 @@ where
     type Item = anyhow::Result<String>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        this.inner.poll_next(cx)
+        let mut this = self.project();
+        this.inner.as_mut().as_mut().poll_next(cx)
     }
 }

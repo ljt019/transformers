@@ -34,7 +34,6 @@ async fn main() -> Result<()> {
     let mut stream = pipeline
         .completion_stream_with_tools("What's the weather like in Tokyo?")
         .await?;
-    futures::pin_mut!(stream);
 
     println!("\n--- Streaming Events ---");
 

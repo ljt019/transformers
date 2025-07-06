@@ -15,7 +15,6 @@ async fn main() -> Result<()> {
         "Explain the concept of Large Language Models in simple terms.",
     )
     .await?;
-    futures::pin_mut!(stream);
 
     println!("\n--- Generated Text ---");
     while let Some(tok) = stream.next().await {
@@ -30,7 +29,6 @@ async fn main() -> Result<()> {
     ];
 
     let mut stream_two = pipeline.completion_stream(&messages).await?;
-    futures::pin_mut!(stream_two);
 
     println!("\n--- Generated Text 2 ---");
     while let Some(tok) = stream_two.next().await {
