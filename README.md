@@ -247,7 +247,7 @@ fn main() -> anyhow::Result<()> {
 
 #### XML Parsing for Structured Output
 
-You can build pipelines with XML parsing capabilities to handle structured outputs from models. This is particularly useful for parsing tool calls, reasoning traces, or any XML-tagged content in model responses.
+You can build pipelines with XML parsing capabilities to handle structured outputs from models. This is particularly useful for parsing tool calls, and reasoning traces.
 
 ```rust
 use transformers::pipelines::text_generation_pipeline::*;
