@@ -881,7 +881,7 @@ impl TextGenerationModel for Qwen3Model {
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
         // Determine thinking mode
         let mut enable_thinking = self.reasoning;
-        if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == "user") {
+        if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == crate::Role::User) {
             let content = last_user_msg.content();
             if content.contains("/think") {
                 enable_thinking = true;
@@ -895,7 +895,7 @@ impl TextGenerationModel for Qwen3Model {
             .iter()
             .map(|msg| {
                 let mut content = msg.content().to_string();
-                if msg.role() == "user" {
+                if msg.role() == crate::Role::User {
                     content = content
                         .replace("/think", "")
                         .replace("/no_think", "")

@@ -13,7 +13,7 @@ pub mod pipelines;
 pub use tool_macro::tool;
 
 // Re-export core types
-pub use core::{Message, MessageVecExt};
+pub use core::{Message, MessageVecExt, Role};
 
 // Re-export model types for easier access
 pub use models::implementations::{

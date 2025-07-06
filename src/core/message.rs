@@ -1,7 +1,33 @@
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// An individual message in a chat.
 pub struct Message {
-    role: String,
+    role: Role,
     content: String,
 }
 
@@ -12,7 +38,7 @@ impl Message {
     /// It's not recommended to use more than one of these in a given chat.
     pub fn system(content: &str) -> Self {
         Self {
-            role: "system".to_string(),
+            role: Role::System,
             content: content.to_string(),
         }
     }
@@ -22,7 +48,7 @@ impl Message {
     /// User messages are used to send messages from the user to the model.
     pub fn user(content: &str) -> Self {
         Self {
-            role: "user".to_string(),
+            role: Role::User,
             content: content.to_string(),
         }
     }
@@ -32,14 +58,14 @@ impl Message {
     /// Assistant messages are used to store responses from the model.
     pub fn assistant(content: &str) -> Self {
         Self {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: content.to_string(),
         }
     }
 
     /// Get the role of the message.
-    pub fn role(&self) -> &str {
-        &self.role
+    pub fn role(&self) -> Role {
+        self.role
     }
 
     /// Get the content of the message.
@@ -78,7 +104,7 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
         self.as_ref()
             .iter()
             .rev()
-            .find(|message| message.role() == "user")
+            .find(|message| message.role() == Role::User)
             .map(|msg| msg.content())
     }
 
@@ -86,14 +112,14 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
         self.as_ref()
             .iter()
             .rev()
-            .find(|message| message.role() == "assistant")
+            .find(|message| message.role() == Role::Assistant)
             .map(|msg| msg.content())
     }
 
     fn system(&self) -> Option<&str> {
         self.as_ref()
             .iter()
-            .find(|message| message.role() == "system")
+            .find(|message| message.role() == Role::System)
             .map(|msg| msg.content())
     }
 }

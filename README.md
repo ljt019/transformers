@@ -136,7 +136,7 @@ fn main() -> anyhow::Result<()> {
 
 For more conversational interactions, you can pass a list of messages to the `completion` method.
 
-The `Message` struct represents a single message in a chat and has a `role` (system, user, or assistant) and `content`. You can create messages using:
+The `Message` struct represents a single message in a chat and has a typed `Role` (`System`, `User`, or `Assistant`) and `content`. You can create messages using:
 
 - `Message::system(content: &str)`: For system prompts.
 - `Message::user(content: &str)`: For user prompts.
