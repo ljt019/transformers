@@ -145,6 +145,7 @@ The `Message` struct represents a single message in a chat and has a `role` (sys
 ```rust
 use transformers::pipelines::text_generation_pipeline::TextGenerationPipelineBuilder;
 use transformers::pipelines::text_generation_pipeline::Messages;
+use futures::StreamExt;
 
 fn main() -> anyhow::Result<()> {
     // 1. Create the pipeline
@@ -243,6 +244,47 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+#### XML Parsing for Structured Output
+
+You can build pipelines with XML parsing capabilities to handle structured outputs from models. This is particularly useful for parsing tool calls, and reasoning traces.
+
+```rust
+use transformers::pipelines::text_generation_pipeline::*;
+
+fn main() -> anyhow::Result<()> {
+    // 1. Build a pipeline with XML parsing for specific tags
+    let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+        .max_len(1024)
+        .build_xml(&["think", "tool_result", "tool_call"])
+        .await?;
+
+    // 2. Generate completion - returns Vec<Event> instead of String
+    let events = pipeline.completion("Explain your reasoning step by step.").await?;
+
+    // 3. Process events based on tags
+    for event in events {
+        match event.tag() {
+            Some("think") => match event.part() {
+                TagParts::Start => println!("[THINKING]"),
+                TagParts::Content => print!("{}", event.get_content()),
+                TagParts::End => println!("[END THINKING]"),
+            },
+            None => {
+                // Regular content outside tags
+                if event.part() == TagParts::Content {
+                    print!("{}", event.get_content());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+```
+
+The XML parser also works with streaming completions, emitting events as XML tags are encountered in the stream. This enables real-time processing of structured outputs without waiting for the full response.
 
 ### Fill Mask (ModernBERT)
 

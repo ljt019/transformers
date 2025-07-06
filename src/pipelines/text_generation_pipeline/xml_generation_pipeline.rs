@@ -5,16 +5,11 @@ use super::text_generation_model::{
 };
 use super::text_generation_pipeline::Input;
 use super::xml_parser::{Event, XmlParser};
-use crate::models::generation::{
-    apply_repeat_penalty, initialize_logits_processor, GenerationParams,
-};
-use async_stream::try_stream;
-use candle_core::Tensor;
-use futures::Stream;
+use crate::models::generation::GenerationParams;
+use async_stream::stream;
 use regex::Regex;
 use serde::Deserialize;
-use std::pin::Pin;
-use std::sync::Arc;
+use futures::Stream;
 
 /// XML generation pipeline that outputs parsed Events
 pub struct XmlGenerationPipeline<M: TextGenerationModel> {
@@ -133,232 +128,91 @@ impl<M: TextGenerationModel + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         match input.into() {
-            Input::Prompt(p) => self.prompt_completion_stream(p).await,
-            Input::Messages(m) => self.message_completion_stream(m).await,
+            Input::Prompt(p) => {
+                self.base.context.lock().await.reset();
+                let templated = self
+                    .base
+                    .model
+                    .lock()
+                    .await
+                    .apply_chat_template(&[crate::Message::user(p)])?;
+                let tokens = self
+                    .base
+                    .model_tokenizer
+                    .encode(templated, true)
+                    .map_err(|e| anyhow::anyhow!(e))?
+                    .get_ids()
+                    .to_vec();
+
+                Ok(self.event_stream_from_tokens(tokens))
+            }
+            Input::Messages(m) => {
+                let templated = self
+                    .base
+                    .model
+                    .lock()
+                    .await
+                    .apply_chat_template(m)?;
+                let new_tokens = self
+                    .base
+                    .model_tokenizer
+                    .encode(templated, true)
+                    .map_err(|e| anyhow::anyhow!(e))?
+                    .get_ids()
+                    .to_vec();
+
+                let max_seq = self.base.model.lock().await.get_max_seq_len();
+                if self.base.context.lock().await.position() + new_tokens.len() > max_seq {
+                    self.base.context.lock().await.reset();
+                    self.base.last_processed_tokens.lock().await.clear();
+                } else if self.base.can_reuse_cache(&new_tokens).await {
+                    let suffix = new_tokens[self.base.last_processed_tokens.lock().await.len()..].to_vec();
+                    *self.base.last_processed_tokens.lock().await = new_tokens;
+                    return Ok(self.event_stream_from_tokens(suffix));
+                } else {
+                    self.base.context.lock().await.reset();
+                }
+
+                *self.base.last_processed_tokens.lock().await = new_tokens.clone();
+                Ok(self.event_stream_from_tokens(new_tokens))
+            }
         }
     }
 
-    async fn prompt_completion_stream(
-        &self,
-        prompt: &str,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + '_>>> {
-        // Fresh turn → reset context
-        self.base.context.lock().await.reset();
-
-        let templated = self
-            .base
-            .model
-            .lock()
-            .await
-            .apply_chat_template(&[crate::Message::user(prompt)])?;
-        let tokens = self
-            .base
-            .model_tokenizer
-            .encode(templated, true)
-            .map_err(|e| anyhow::anyhow!(e))?
-            .get_ids()
-            .to_vec();
-
-        use futures::StreamExt;
-        let inner = self.raw_completion_stream(tokens);
-
-        self.xml_parser.reset();
-        let parser = self.xml_parser.clone();
-
-        use async_stream::stream;
-        Ok(Box::pin(stream! {
-            futures::pin_mut!(inner);
-            while let Some(result) = inner.next().await {
-                let token = result.expect("stream generation failed");
-                let events = parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-
-            // Flush any remaining events
-            let final_events = parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        }))
-    }
-
-    async fn message_completion_stream(
-        &self,
-        messages: &[crate::Message],
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + '_>>> {
-        let templated = self
-            .base
-            .model
-            .lock()
-            .await
-            .apply_chat_template(messages)?;
-        let new_tokens = self
-            .base
-            .model_tokenizer
-            .encode(templated, true)
-            .map_err(|e| anyhow::anyhow!(e))?
-            .get_ids()
-            .to_vec();
-
-        // Same cache logic
-        let max_seq = self.base.model.lock().await.get_max_seq_len();
-        if self.base.context.lock().await.position() + new_tokens.len() > max_seq {
-            self.base.context.lock().await.reset();
-            self.base.last_processed_tokens.lock().await.clear();
-        } else if self.base.can_reuse_cache(&new_tokens).await {
-            let suffix =
-                new_tokens[self.base.last_processed_tokens.lock().await.len()..].to_vec();
-            *self.base.last_processed_tokens.lock().await = new_tokens;
-
-            let inner = self.raw_completion_stream(suffix);
-            self.xml_parser.reset();
-            let parser = self.xml_parser.clone();
-
-            use async_stream::stream;
-            use futures::StreamExt;
-            return Ok(Box::pin(stream! {
-                futures::pin_mut!(inner);
-                while let Some(result) = inner.next().await {
-                    let token = result.expect("stream generation failed");
-                    let events = parser.parse_token(&token);
-                    for event in events {
-                        yield event;
-                    }
-                }
-
-                // Flush any remaining events
-                let final_events = parser.flush();
-                for event in final_events {
-                    yield event;
-                }
-            }));
-        } else {
-            self.base.context.lock().await.reset();
-        }
-
-        *self.base.last_processed_tokens.lock().await = new_tokens.clone();
-        let inner = self.raw_completion_stream(new_tokens);
-
-        self.xml_parser.reset();
-        let parser = self.xml_parser.clone();
-
-        use async_stream::stream;
-        use futures::StreamExt;
-        Ok(Box::pin(stream! {
-            futures::pin_mut!(inner);
-            while let Some(result) = inner.next().await {
-                let token = result.expect("stream generation failed");
-                let events = parser.parse_token(&token);
-                for event in events {
-                    yield event;
-                }
-            }
-
-            // Flush any remaining events
-            let final_events = parser.flush();
-            for event in final_events {
-                yield event;
-            }
-        }))
-    }
-
-    fn raw_completion_stream<'a>(
+    fn event_stream_from_tokens<'a>(
         &'a self,
-        input_tokens: Vec<u32>,
-    ) -> Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send + 'a>>
+        tokens: Vec<u32>,
+    ) -> crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>
     where
-        M: 'a,
+        M: Send + 'a,
     {
-        // Capture everything the async generator needs **by value**
-        let device = self.base.device.clone();
-        let model = Arc::clone(&self.base.model);
-        let tokenizer = self.base.model_tokenizer.clone();
-        let context = Arc::clone(&self.base.context);
-        let gen_params = Arc::clone(&self.base.gen_params);
+        use futures::StreamExt;
+        use async_stream::stream;
 
-        Box::pin(try_stream! {
-            let params = gen_params.lock().await.clone();
-            let eos_tokens = model.lock().await.get_eos_tokens();
-            const CHUNK_SIZE: usize = 64;
+        let inner = self.base.token_stream(tokens);
 
-            let mut logits_processor =
-                initialize_logits_processor(&params, params.seed);
+        self.xml_parser.reset();
+        let parser = self.xml_parser.clone();
 
-            // Send the whole prompt first
-            let mut idx = 0;
-            let mut last_logits = None;
-            while idx < input_tokens.len() {
-                let end   = usize::min(idx + CHUNK_SIZE, input_tokens.len());
-                let chunk = &input_tokens[idx..end];
-
-                let input  = Tensor::new(chunk, &device)?.unsqueeze(0)?;
-                let logits = {
-                    let mut ctx = context.lock().await;
-                    ctx.generate(&input)
-                }?;
-                last_logits = Some(logits.squeeze(0)?);
-                idx = end;
-            }
-
-            // First sampled token
-            let mut generated: Vec<u32> = Vec::with_capacity(params.max_len);
-
-            // Incremental decoder that keeps special tokens
-            let mut dec_full  = tokenizer.decode_stream(false);
-
-            let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
-            generated.push(next_token);
-
-            // Skip yielding if this token is an EOS token
-            if !eos_tokens.contains(&next_token) {
-                if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
-                    yield chunk;
-                }
-            } else {
-                // Still need to step the decoder to keep state consistent, but don't yield
-                let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
-            }
-
-            // Autoregressive loop
-            for _ in 0..params.max_len {
-                if eos_tokens.contains(&next_token) {
-                    break;
-                }
-
-                let input  = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-                let logits = {
-                    let mut ctx = context.lock().await;
-                    ctx.generate(&input)
-                }?;
-                let logits = logits.squeeze(0)?;
-
-                let start_at = generated.len().saturating_sub(params.repeat_last_n);
-                let penalty_context = &generated[start_at..];
-
-                let logits = if params.repeat_penalty <= 1. || penalty_context.is_empty() {
-                    logits
-                } else {
-                    apply_repeat_penalty(&logits, params.repeat_penalty, penalty_context)?
-                };
-
-                next_token = logits_processor.sample(&logits)?;
-                generated.push(next_token);
-
-                // Skip yielding if this token is an EOS token
-                if !eos_tokens.contains(&next_token) {
-                    if let Some(chunk) = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))? {
-                        yield chunk;
-                    }
-                } else {
-                    // Still need to step the decoder, but don't yield
-                    let _ = dec_full.step(next_token).map_err(|e| anyhow::anyhow!(e))?;
+        let event_stream = stream! {
+            futures::pin_mut!(inner);
+            while let Some(result) = inner.next().await {
+                let token = result.expect("stream generation failed");
+                let events = parser.parse_token(&token);
+                for event in events {
+                    yield event;
                 }
             }
-        })
+
+            let final_events = parser.flush();
+            for event in final_events {
+                yield event;
+            }
+        };
+        
+        crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream)
     }
 }
 
@@ -403,7 +257,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
     /// Execute a list of tool calls with retry logic and error handling
     /// Returns a vector of formatted tool responses
-    fn execute_tool_calls(
+    async fn execute_tool_calls(
         &self,
         tool_calls: Vec<ToolCallInvocation>,
         tools: &[Tool],
@@ -449,7 +303,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                                 }
                             }
                         } else {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         }
                     }
                 }
@@ -521,7 +375,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                     messages.push(crate::Message::assistant(&response));
 
                     // Execute tools and get responses
-                    let tool_responses = self.execute_tool_calls(tool_calls, &tools)?;
+                    let tool_responses = self.execute_tool_calls(tool_calls, &tools).await?;
                     let tool_response_text = tool_responses.join("\n");
 
                     // Append tool results and ensure a single trailing newline for spacing
@@ -550,7 +404,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
     pub async fn completion_stream_with_tools<'a>(
         &'a self,
         input: impl Into<Input<'a>>,
-    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = Event> + Send + 'a>>> {
+    ) -> anyhow::Result<crate::pipelines::text_generation_pipeline::event_stream::EventStream<impl Stream<Item = Event> + Send + 'a>> {
         use async_stream::stream;
         use futures::StreamExt;
 
@@ -566,7 +420,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
 
         let xml_parser = self.xml_parser.clone();
 
-        Ok(Box::pin(stream! {
+        let event_stream = stream! {
             let mut messages = initial_messages;
             let mut raw_buffer = String::new();  // Keep raw text with tags
 
@@ -609,7 +463,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                         new_tokens
                     };
 
-                    let stream_inner = self.raw_completion_stream(tokens_to_process);
+                    let stream_inner = self.base.token_stream(tokens_to_process);
                     futures::pin_mut!(stream_inner);
 
                     while let Some(result) = stream_inner.next().await {
@@ -645,7 +499,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                         raw_buffer.clear();
 
                         // Execute tools
-                        let tool_responses = match self.execute_tool_calls(tool_calls, &tools) {
+                        let tool_responses = match self.execute_tool_calls(tool_calls, &tools).await {
                             Ok(responses) => responses,
                             Err(_e) => {
                                 // Error executing tools, break out
@@ -673,7 +527,9 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                     }
                 }
             }
-        }))
+        };
+        
+        Ok(crate::pipelines::text_generation_pipeline::event_stream::EventStream::new(event_stream))
     }
 
     fn extract_tool_calls(text: &str) -> anyhow::Result<Vec<ToolCallInvocation>> {

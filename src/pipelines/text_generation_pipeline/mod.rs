@@ -1,5 +1,6 @@
 pub mod base_pipeline;
 pub mod completion_stream;
+pub mod event_stream;
 pub mod text_generation_model;
 pub mod text_generation_pipeline;
 pub mod text_generation_pipeline_builder;
@@ -9,6 +10,7 @@ pub mod xml_parser;
 
 pub use crate::tools;
 pub use completion_stream::CompletionStream;
+pub use event_stream::EventStream;
 pub use text_generation_pipeline::{Input, TextGenerationPipeline};
 pub use text_generation_pipeline_builder::TextGenerationPipelineBuilder;
 pub use xml_generation_pipeline::XmlGenerationPipeline;
