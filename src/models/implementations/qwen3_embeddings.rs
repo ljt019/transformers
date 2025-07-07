@@ -1,25 +1,25 @@
 use std::sync::Arc;
 
-use candle_core::{Device, Tensor, Result, DType};
+use candle_core::{DType, Device, Result, Tensor};
 use tokenizers::Tokenizer;
 
-use super::qwen3::{ModelWeights};
-use crate::loaders::{GgufModelLoader, TokenizerLoader};
+use super::qwen3::ModelWeights;
 use super::qwen3::Qwen3Size;
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
 fn embed_id(size: Qwen3Size) -> anyhow::Result<(String, String)> {
     match size {
         Qwen3Size::Size0_6B => Ok((
             "Qwen/Qwen3-Embedding-0.6B-GGUF".into(),
-            "qwen3-embedding-0.6b-q4_k_m.gguf".into(),
+            "Qwen3-Embedding-0.6B-Q8_0.gguf".into(),
         )),
         Qwen3Size::Size4B => Ok((
             "Qwen/Qwen3-Embedding-4B-GGUF".into(),
-            "qwen3-embedding-4b-q4_k_m.gguf".into(),
+            "Qwen3-Embedding-4B-Q8_0.gguf".into(),
         )),
         Qwen3Size::Size8B => Ok((
             "Qwen/Qwen3-Embedding-8B-GGUF".into(),
-            "qwen3-embedding-8b-q4_k_m.gguf".into(),
+            "Qwen3-Embedding-8B-Q8_0.gguf".into(),
         )),
         other => anyhow::bail!("No embedding weights available for {other}"),
     }
@@ -38,11 +38,14 @@ impl Qwen3EmbeddingModel {
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
-        Ok(Self { weights, device: device.clone() })
+        Ok(Self {
+            weights,
+            device: device.clone(),
+        })
     }
 
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let loader = TokenizerLoader::new("Qwen/Qwen3-Embedding-0.6B-GGUF", "tokenizer.json");
+        let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         loader.load().await
     }
 
@@ -54,10 +57,9 @@ impl Qwen3EmbeddingModel {
             .map_err(anyhow::Error::msg)?;
         let ids = encoded.get_ids();
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
-        let mask = create_causal_mask(&self.device, 1, ids.len(), 0)?;
-        let emb = self
-            .weights
-            .forward_embedding(&input, Some(&mask))?;
+        // Attention mask is not required for a single-sequence forward pass. Omitting it avoids
+        // shape-broadcast issues on very short inputs.
+        let emb = self.weights.forward_embedding(&input, None)?;
         let emb = l2_normalise(emb)?;
         Ok(emb.to_vec1::<f32>()?)
     }
@@ -118,8 +120,7 @@ impl EmbeddingModel for Qwen3EmbeddingModel {
     }
 
     fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
-        let (repo, _) = embed_id(options)?;
-        let loader = TokenizerLoader::new(&repo, "tokenizer.json");
+        let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         futures::executor::block_on(loader.load())
     }
 
