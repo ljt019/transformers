@@ -150,19 +150,12 @@ impl Event {
 
 /// Builder for creating an XmlParser with specific tags to watch for
 #[derive(Debug)]
+#[derive(Default)]
 pub struct XmlParserBuilder {
     tags: Vec<String>,
     next_id: usize,
 }
 
-impl Default for XmlParserBuilder {
-    fn default() -> Self {
-        Self {
-            tags: Vec::new(),
-            next_id: 0,
-        }
-    }
-}
 
 impl XmlParserBuilder {
     /// Create a new XmlParserBuilder
@@ -198,6 +191,7 @@ impl XmlParserBuilder {
 
 /// Parser state for tracking XML tag parsing
 #[derive(Debug, Clone)]
+#[derive(Default)]
 struct ParserState {
     /// Stack of currently open tags (tag name and accumulated content)
     open_tags: Vec<(String, String)>,
@@ -219,20 +213,6 @@ struct ParserState {
     last_content_had_newline: bool,
 }
 
-impl Default for ParserState {
-    fn default() -> Self {
-        Self {
-            open_tags: Vec::new(),
-            content_buffer: String::new(),
-            tag_buffer: String::new(),
-            in_tag: false,
-            emitted_top_len: 0,
-            emitted_tag_lens: std::collections::HashMap::new(),
-            top_level_open: false,
-            last_content_had_newline: false,
-        }
-    }
-}
 
 /// XML parser that can process streaming or complete text and emit events
 #[derive(Debug, Clone)]
@@ -467,19 +447,15 @@ impl XmlParser {
                         events.push(Event::start(tag_handle.clone()));
                     }
                 }
-            } else {
-                if state.open_tags.is_empty() {
-                    state.content_buffer.push_str(tag_content);
-                } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
-                    content.push_str(tag_content);
-                }
-            }
-        } else {
-            if state.open_tags.is_empty() {
+            } else if state.open_tags.is_empty() {
                 state.content_buffer.push_str(tag_content);
             } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
                 content.push_str(tag_content);
             }
+        } else if state.open_tags.is_empty() {
+            state.content_buffer.push_str(tag_content);
+        } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+            content.push_str(tag_content);
         }
 
         events
@@ -493,15 +469,14 @@ impl XmlParser {
 
         let inner = &tag_content[1..tag_content.len() - 1];
 
-        if inner.starts_with('/') {
+        if let Some(name) = inner.strip_prefix('/') {
             // Closing tag
-            let name = &inner[1..];
             Some(name.split_whitespace().next()?.to_string())
         } else {
             // Opening tag or self-closing tag
             let name = inner.split_whitespace().next()?;
-            if name.ends_with('/') {
-                Some(name[..name.len() - 1].to_string())
+            if let Some(stripped) = name.strip_suffix('/') {
+                Some(stripped.to_string())
             } else {
                 Some(name.to_string())
             }

@@ -506,7 +506,7 @@ impl ModelWeights {
         }
         hidden = self.final_norm.forward(&hidden)?;
         let last = hidden.narrow(1, t - 1, 1)?;
-        Ok(last.squeeze(1)?)
+        last.squeeze(1)
     }
   
     /// Forward pass returning logits for all tokens in the sequence.
@@ -584,7 +584,7 @@ impl std::fmt::Display for Qwen3Size {
             Qwen3Size::Size14B => "qwen3-14b",
             Qwen3Size::Size32B => "qwen3-32b",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 

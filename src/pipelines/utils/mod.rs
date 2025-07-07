@@ -24,8 +24,10 @@ pub fn load_device() -> anyhow::Result<Device> {
 
 /// Request for a specific device, used by pipeline builders.
 #[derive(Clone)]
+#[derive(Default)]
 pub enum DeviceRequest {
     /// Use CUDA if available, otherwise CPU (default behavior).
+    #[default]
     Default,
     /// Force CPU even if CUDA is available.
     Cpu,
@@ -35,11 +37,6 @@ pub enum DeviceRequest {
     Explicit(Device),
 }
 
-impl Default for DeviceRequest {
-    fn default() -> Self {
-        DeviceRequest::Default
-    }
-}
 
 impl DeviceRequest {
     /// Resolve the request into an actual [`Device`].

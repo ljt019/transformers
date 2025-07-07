@@ -638,7 +638,7 @@ impl std::fmt::Display for ModernBertSize {
             ModernBertSize::Base => "modernbert-base",
             ModernBertSize::Large => "modernbert-large",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -681,22 +681,21 @@ impl FillMaskModernBertModel {
 
         let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
             E::msg(format!(
-                "Failed to read config file {:?}: {}",
-                config_filename, e
+                "Failed to read config file {config_filename:?}: {e}"
             ))
         })?;
         let config: Config = serde_json::from_str(&config_content)
-            .map_err(|e| E::msg(format!("Failed to parse model config: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse model config: {e}")))?;
 
         let dtype = DType::F32;
         let vb = if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "safetensors")
+            .is_some_and(|ext| ext == "safetensors")
         {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device)? }
         } else if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "bin")
+            .is_some_and(|ext| ext == "bin")
         {
             VarBuilder::from_pth(&weights_filename, dtype, &device)?
         } else {
@@ -715,7 +714,7 @@ impl FillMaskModernBertModel {
     pub fn predict(&self, tokenizer: &Tokenizer, text: &str) -> AnyhowResult<String> {
         let encoding = tokenizer
             .encode(text, true)
-            .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
+            .map_err(|e| E::msg(format!("Tokenization error: {e}")))?;
         let mask_id = tokenizer.token_to_id("[MASK]").unwrap_or(103);
         let mask_index = encoding
             .get_ids()
@@ -728,7 +727,7 @@ impl FillMaskModernBertModel {
         let attention_mask_vals = encoding.get_attention_mask();
 
         let input_ids = Tensor::new(encoding.get_ids(), &self.device)?.unsqueeze(0)?;
-        let attention_mask = Tensor::new(&attention_mask_vals[..], &self.device)?.unsqueeze(0)?;
+        let attention_mask = Tensor::new(attention_mask_vals, &self.device)?.unsqueeze(0)?;
         let logits = self.model.forward(&input_ids, &attention_mask)?;
         let logits = logits.squeeze(0)?.i((mask_index, ..))?;
         let probs = softmax(&logits, D::Minus1)?;
@@ -814,8 +813,7 @@ impl ZeroShotModernBertModel {
 
         let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
             E::msg(format!(
-                "Failed to read config file {:?}: {}",
-                config_filename, e
+                "Failed to read config file {config_filename:?}: {e}"
             ))
         })?;
 
@@ -827,7 +825,7 @@ impl ZeroShotModernBertModel {
             classifier_pooling: Option<ClassifierPooling>,
         }
         let class_cfg: ClassifierConfigRaw = serde_json::from_str(&config_content)
-            .map_err(|e| E::msg(format!("Failed to parse classifier config: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse classifier config: {e}")))?;
         let id2label = class_cfg.id2label;
         let label2id = class_cfg.label2id;
         let classifier_pooling = class_cfg
@@ -836,7 +834,7 @@ impl ZeroShotModernBertModel {
 
         // Parse full model config
         let mut config: Config = serde_json::from_str(&config_content)
-            .map_err(|e| E::msg(format!("Failed to parse model config: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse model config: {e}")))?;
 
         // Convert label2id values to strings for ClassifierConfig
         let label2id_for_config: HashMap<String, String> = label2id
@@ -853,12 +851,12 @@ impl ZeroShotModernBertModel {
         let dtype = DType::F32;
         let vb = if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "safetensors")
+            .is_some_and(|ext| ext == "safetensors")
         {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device)? }
         } else if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "bin")
+            .is_some_and(|ext| ext == "bin")
         {
             VarBuilder::from_pth(&weights_filename, dtype, &device)?
         } else {
@@ -936,10 +934,10 @@ impl ZeroShotModernBertModel {
 
         let mut encodings = Vec::new();
         for &label in candidate_labels {
-            let hypothesis = format!("This example is {}.", label);
+            let hypothesis = format!("This example is {label}.");
             let encoding = tokenizer
                 .encode((text, hypothesis.as_str()), true)
-                .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
+                .map_err(|e| E::msg(format!("Tokenization error: {e}")))?;
             encodings.push(encoding);
         }
 
@@ -991,7 +989,7 @@ impl ZeroShotModernBertModel {
         let mut results: Vec<(String, f32)> = candidate_labels
             .iter()
             .map(|&label| label.to_string())
-            .zip(entailment_probs.into_iter())
+            .zip(entailment_probs)
             .collect();
 
         // Sort by score descending
@@ -1092,8 +1090,7 @@ impl SentimentModernBertModel {
 
         let config_content = std::fs::read_to_string(&config_filename).map_err(|e| {
             E::msg(format!(
-                "Failed to read config file {:?}: {}",
-                config_filename, e
+                "Failed to read config file {config_filename:?}: {e}"
             ))
         })?;
 
@@ -1103,12 +1100,12 @@ impl SentimentModernBertModel {
             id2label: HashMap<String, String>,
         }
         let class_cfg: ClassifierConfigRaw = serde_json::from_str(&config_content)
-            .map_err(|e| E::msg(format!("Failed to parse classifier config: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse classifier config: {e}")))?;
         let id2label = class_cfg.id2label;
 
         // Parse full model config
         let mut config: Config = serde_json::from_str(&config_content)
-            .map_err(|e| E::msg(format!("Failed to parse model config: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse model config: {e}")))?;
 
         let label2id = id2label
             .iter()
@@ -1129,12 +1126,12 @@ impl SentimentModernBertModel {
         let dtype = DType::F32;
         let vb = if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "safetensors")
+            .is_some_and(|ext| ext == "safetensors")
         {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], dtype, &device)? }
         } else if weights_filename
             .extension()
-            .map_or(false, |ext| ext == "bin")
+            .is_some_and(|ext| ext == "bin")
         {
             VarBuilder::from_pth(&weights_filename, dtype, &device)?
         } else {
@@ -1158,14 +1155,14 @@ impl SentimentModernBertModel {
         // Tokenize
         let tokens = tokenizer
             .encode(text, true)
-            .map_err(|e| E::msg(format!("Tokenization error: {}", e)))?;
+            .map_err(|e| E::msg(format!("Tokenization error: {e}")))?;
         let token_ids = tokens.get_ids();
         let attention_mask_vals = tokens.get_attention_mask();
 
         // Prepare tensors
-        let input_ids_tensor = Tensor::new(&token_ids[..], &self.device)?.unsqueeze(0)?;
+        let input_ids_tensor = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
         let attention_mask_tensor =
-            Tensor::new(&attention_mask_vals[..], &self.device)?.unsqueeze(0)?;
+            Tensor::new(attention_mask_vals, &self.device)?.unsqueeze(0)?;
 
         // Forward pass
         let output_logits = self
@@ -1182,8 +1179,7 @@ impl SentimentModernBertModel {
             .get(&predictions.to_string())
             .ok_or_else(|| {
                 E::msg(format!(
-                    "Predicted ID '{}' not found in id2label map",
-                    predictions
+                    "Predicted ID '{predictions}' not found in id2label map"
                 ))
             })?
             .clone();

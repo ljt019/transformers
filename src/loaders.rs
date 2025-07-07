@@ -1,3 +1,36 @@
+//! Model and tokenizer loading utilities for Hugging Face Hub integration.
+//!
+//! This module provides loaders for downloading and loading various AI model components
+//! from Hugging Face Hub, including:
+//! - Model weight files (GGUF format)
+//! - Tokenizers (JSON format)  
+//! - Generation configuration files
+//!
+//! ## Main Types
+//!
+//! - [`HfLoader`] - Generic Hugging Face file loader with retry logic
+//! - [`TokenizerLoader`] - Loads tokenizers from Hugging Face repositories
+//! - [`GenerationConfigLoader`] - Loads generation configuration files
+//! - [`GgufModelLoader`] - Loads GGUF format model weight files
+//!
+//! ## Usage Example
+//!
+//! ```rust,no_run
+//! use transformers::loaders::{TokenizerLoader, GgufModelLoader};
+//!
+//! // Load a tokenizer
+//! let tokenizer_loader = TokenizerLoader::new("microsoft/DialoGPT-small", "tokenizer.json");
+//! let tokenizer = tokenizer_loader.load().await?;
+//!
+//! // Load model weights
+//! let model_loader = GgufModelLoader::new("microsoft/DialoGPT-small", "model.gguf");
+//! let (file, content) = model_loader.load().await?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+//!
+//! All loaders include built-in retry logic to handle temporary network issues
+//! and Hugging Face Hub lock acquisition failures.
+
 use crate::core::GenerationConfig;
 use hf_hub::api::tokio::Api as HfApi;
 use std::path::PathBuf;
@@ -164,6 +197,6 @@ impl GgufModelLoader {
         let file_content = candle_core::quantized::gguf_file::Content::read(&mut file)
             .map_err(|e| e.with_path(model_file_path))?;
 
-        return Ok((file, file_content));
+        Ok((file, file_content))
     }
 }

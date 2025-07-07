@@ -1,3 +1,45 @@
+//! Text generation pipeline for generating human-like text completions.
+//!
+//! This module provides functionality for generating text using large language models,
+//! including both single completions and streaming outputs. It supports various generation
+//! strategies, XML parsing for structured outputs, and tool calling capabilities.
+//!
+//! ## Main Types
+//!
+//! - [`TextGenerationPipeline`] - High-level interface for text generation
+//! - [`XmlGenerationPipeline`] - Specialized pipeline for XML-structured generation
+//! - [`TextGenerationPipelineBuilder`] - Builder pattern for pipeline configuration
+//! - [`CompletionStream`] - Stream of generated tokens for real-time output
+//! - [`GenerationParams`] - Parameters controlling generation behavior
+//! - [`Tool`] - Trait for implementing function calling capabilities
+//!
+//! ## Usage Example
+//!
+//! ```rust,no_run
+//! use transformers::pipelines::text_generation_pipeline::*;
+//!
+//! # tokio_test::block_on(async {
+//! // Create a text generation pipeline
+//! let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+//!     .temperature(0.7)
+//!     .max_len(100)
+//!     .build()
+//!     .await?;
+//!
+//! // Generate text completion
+//! let completion = pipeline.completion("Once upon a time").await?;
+//! println!("Generated: {}", completion);
+//!
+//! // Stream generation in real-time
+//! let mut stream = pipeline.completion_stream("Tell me about").await?;
+//! while let Some(token) = stream.next().await {
+//!     print!("{}", token?);
+//!     std::io::stdout().flush().unwrap();
+//! }
+//! # anyhow::Ok(())
+//! # });
+//! ```
+
 pub mod base_pipeline;
 pub mod builder;
 pub mod parser;
