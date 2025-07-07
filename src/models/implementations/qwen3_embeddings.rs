@@ -21,6 +21,14 @@ impl std::fmt::Display for Qwen3EmbeddingSize {
         }
     }
 }
+
+// Allow embedding size to be used as a cache key just like other model option enums.
+impl crate::core::ModelOptions for Qwen3EmbeddingSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
 fn embed_id(size: Qwen3EmbeddingSize) -> (String, String) {
@@ -71,10 +79,10 @@ impl Qwen3EmbeddingModel {
 
     /// Generate an embedding with optional instruction concatenation.
     pub fn embed_with_instruction(
-        &self, 
-        tokenizer: &Tokenizer, 
-        instruction: Option<&str>, 
-        text: &str
+        &self,
+        tokenizer: &Tokenizer,
+        instruction: Option<&str>,
+        text: &str,
     ) -> anyhow::Result<Vec<f32>> {
         const EOS: &str = "<|endoftext|>";
         let input_text = match instruction {
@@ -86,7 +94,10 @@ impl Qwen3EmbeddingModel {
             .map_err(anyhow::Error::msg)?;
         let ids = encoded.get_ids();
         if ids.is_empty() {
-            return Err(anyhow::anyhow!("Tokenizer produced empty token sequence for text: '{}'", input_text));
+            return Err(anyhow::anyhow!(
+                "Tokenizer produced empty token sequence for text: '{}'",
+                input_text
+            ));
         }
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         // Attention mask is not required for a single-sequence forward pass. Omitting it avoids
