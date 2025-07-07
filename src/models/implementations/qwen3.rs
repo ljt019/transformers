@@ -508,7 +508,7 @@ impl ModelWeights {
         let last = hidden.narrow(1, t - 1, 1)?;
         Ok(last.squeeze(1)?)
     }
-
+  
     /// Forward pass returning logits for all tokens in the sequence.
     pub fn forward_logits(
         &self,
