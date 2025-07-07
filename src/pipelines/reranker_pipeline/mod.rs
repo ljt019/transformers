@@ -6,7 +6,6 @@ pub use builder::RerankPipelineBuilder;
 pub use reranker_model::RerankModel;
 pub use reranker_pipeline::RerankPipeline;
 
-pub use crate::models::implementations::qwen3_reranker::Qwen3RerankModel;
-pub use crate::models::implementations::qwen3::Qwen3Size;
+pub use crate::models::implementations::qwen3_reranker::{Qwen3RerankModel, Qwen3RerankSize};
 
 pub use anyhow::Result;

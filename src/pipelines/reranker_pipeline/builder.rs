@@ -47,7 +47,7 @@ impl<M: RerankModel> RerankPipelineBuilder<M> {
 }
 
 impl RerankPipelineBuilder<crate::models::implementations::qwen3_reranker::Qwen3RerankModel> {
-    pub fn qwen3(size: crate::models::implementations::qwen3::Qwen3Size) -> Self {
+    pub fn qwen3(size: crate::models::implementations::qwen3_reranker::Qwen3RerankSize) -> Self {
         Self::new(size)
     }
 }

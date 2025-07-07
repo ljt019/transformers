@@ -1,10 +1,11 @@
 use anyhow::Result;
-use transformers::pipelines::reranker_pipeline::{RerankPipelineBuilder, Qwen3Size};
+use transformers::pipelines::reranker_pipeline::RerankPipelineBuilder;
+use transformers::models::implementations::qwen3_reranker::Qwen3RerankSize;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a reranker pipeline using Qwen3-0.6B
-    let pipeline = RerankPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    // Create a reranker pipeline using Qwen3-Reranker-0.6B
+    let pipeline = RerankPipelineBuilder::qwen3(Qwen3RerankSize::Size0_6B)
         .cpu()
         .build()
         .await?;

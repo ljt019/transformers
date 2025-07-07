@@ -4,29 +4,53 @@ use candle_core::{Device, Result, Tensor};
 use tokenizers::Tokenizer;
 
 use super::qwen3::ModelWeights;
-use super::qwen3::Qwen3Size;
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
-fn rerank_id(size: Qwen3Size) -> anyhow::Result<(String, String)> {
-    match size {
-        Qwen3Size::Size0_6B => Ok((
-            "Qwen/Qwen3-0.6B-GGUF".into(),
-            "Qwen3-0.6B-Q8_0.gguf".into(),
-        )),
-        Qwen3Size::Size1_7B => Ok((
-            "Qwen/Qwen3-1.7B-GGUF".into(),
-            "Qwen3-1.7B-Q8_0.gguf".into(),
-        )),
-        Qwen3Size::Size4B => Ok((
-            "Qwen/Qwen3-4B-GGUF".into(),
-            "Qwen3-4B-Q8_0.gguf".into(),
-        )),
-        Qwen3Size::Size8B => Ok((
-            "Qwen/Qwen3-8B-GGUF".into(),
-            "Qwen3-8B-Q8_0.gguf".into(),
-        )),
-        other => anyhow::bail!("No reranker weights available for {other}"),
+#[derive(Debug, Clone, Copy)]
+pub enum Qwen3RerankSize {
+    Size0_6B,
+    Size4B,
+    Size8B,
+}
+
+impl Qwen3RerankSize {
+    pub fn to_id(&self) -> (String, String) {
+        match self {
+            Qwen3RerankSize::Size0_6B => (
+                "DevQuasar/Qwen.Qwen3-Reranker-0.6B-GGUF".into(),
+                "Qwen.Qwen3-Reranker-0.6B.Q4_K_M.gguf".into(),
+            ),
+            Qwen3RerankSize::Size4B => (
+                "Mungert/Qwen3-Reranker-4B-GGUF".into(),
+                "Qwen3-Reranker-4B-q4_k_m.gguf".into(),
+            ),
+            Qwen3RerankSize::Size8B => (
+                "QuantFactory/Qwen3-Reranker-8B-GGUF".into(),
+                "Qwen3-Reranker-8B.Q4_K_M.gguf".into(),
+            ),
+        }
     }
+}
+
+impl std::fmt::Display for Qwen3RerankSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Qwen3RerankSize::Size0_6B => "qwen3-reranker-0.6b",
+            Qwen3RerankSize::Size4B => "qwen3-reranker-4b",
+            Qwen3RerankSize::Size8B => "qwen3-reranker-8b",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl crate::core::ModelOptions for Qwen3RerankSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
+fn rerank_id(size: Qwen3RerankSize) -> anyhow::Result<(String, String)> {
+    Ok(size.to_id())
 }
 
 /// Qwen3 model for reranking text pairs using cross-encoder architecture.
@@ -37,7 +61,7 @@ pub struct Qwen3RerankModel {
 }
 
 impl Qwen3RerankModel {
-    pub async fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
+    pub async fn from_hf(device: &Device, size: Qwen3RerankSize) -> anyhow::Result<Self> {
         let (repo_id, file_name) = rerank_id(size)?;
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
@@ -147,7 +171,7 @@ fn sigmoid(x: Tensor) -> Result<Tensor> {
 use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
 
 impl RerankModel for Qwen3RerankModel {
-    type Options = Qwen3Size;
+    type Options = Qwen3RerankSize;
 
     fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         futures::executor::block_on(Self::from_hf(&device, options))
