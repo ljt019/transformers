@@ -47,7 +47,7 @@ impl<M: EmbeddingModel> EmbeddingPipelineBuilder<M> {
 }
 
 impl EmbeddingPipelineBuilder<crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingModel> {
-    pub fn qwen3(size: crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingSize) -> Self {
+    pub fn qwen3(size: crate::models::implementations::qwen3::Qwen3Size) -> Self {
         Self::new(size)
     }
 }

@@ -14,5 +14,4 @@ pub use implementations::{
     Qwen3Model,
     Qwen3Size,
     Qwen3EmbeddingModel,
-    Qwen3EmbeddingSize,
 };

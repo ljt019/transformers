@@ -5,49 +5,23 @@ use tokenizers::Tokenizer;
 
 use super::qwen3::{ModelWeights};
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
-use crate::core::ModelOptions;
+use super::qwen3::Qwen3Size;
 
-/// Available Qwen3 embedding model sizes.
-#[derive(Debug, Clone, Copy)]
-pub enum Qwen3EmbeddingSize {
-    Size0_6B,
-    Size4B,
-    Size8B,
-}
-
-impl Qwen3EmbeddingSize {
-    pub fn to_id(&self) -> (String, String) {
-        match self {
-            Qwen3EmbeddingSize::Size0_6B => (
-                "Qwen/Qwen3-Embedding-0.6B-GGUF".into(),
-                "qwen3-embedding-0.6b-q4_k_m.gguf".into(),
-            ),
-            Qwen3EmbeddingSize::Size4B => (
-                "Qwen/Qwen3-Embedding-4B-GGUF".into(),
-                "qwen3-embedding-4b-q4_k_m.gguf".into(),
-            ),
-            Qwen3EmbeddingSize::Size8B => (
-                "Qwen/Qwen3-Embedding-8B-GGUF".into(),
-                "qwen3-embedding-8b-q4_k_m.gguf".into(),
-            ),
-        }
-    }
-}
-
-impl std::fmt::Display for Qwen3EmbeddingSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match self {
-            Qwen3EmbeddingSize::Size0_6B => "qwen3-embedding-0.6b",
-            Qwen3EmbeddingSize::Size4B => "qwen3-embedding-4b",
-            Qwen3EmbeddingSize::Size8B => "qwen3-embedding-8b",
-        };
-        write!(f, "{}", name)
-    }
-}
-
-impl ModelOptions for Qwen3EmbeddingSize {
-    fn cache_key(&self) -> String {
-        self.to_string()
+fn embed_id(size: Qwen3Size) -> anyhow::Result<(String, String)> {
+    match size {
+        Qwen3Size::Size0_6B => Ok((
+            "Qwen/Qwen3-Embedding-0.6B-GGUF".into(),
+            "qwen3-embedding-0.6b-q4_k_m.gguf".into(),
+        )),
+        Qwen3Size::Size4B => Ok((
+            "Qwen/Qwen3-Embedding-4B-GGUF".into(),
+            "qwen3-embedding-4b-q4_k_m.gguf".into(),
+        )),
+        Qwen3Size::Size8B => Ok((
+            "Qwen/Qwen3-Embedding-8B-GGUF".into(),
+            "qwen3-embedding-8b-q4_k_m.gguf".into(),
+        )),
+        other => anyhow::bail!("No embedding weights available for {other}"),
     }
 }
 
@@ -59,8 +33,8 @@ pub struct Qwen3EmbeddingModel {
 }
 
 impl Qwen3EmbeddingModel {
-    pub async fn from_hf(device: &Device, size: Qwen3EmbeddingSize) -> anyhow::Result<Self> {
-        let (repo_id, file_name) = size.to_id();
+    pub async fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
+        let (repo_id, file_name) = embed_id(size)?;
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
@@ -133,7 +107,7 @@ fn create_causal_mask(
 use crate::pipelines::embedding_pipeline::embedding_model::EmbeddingModel;
 
 impl EmbeddingModel for Qwen3EmbeddingModel {
-    type Options = Qwen3EmbeddingSize;
+    type Options = Qwen3Size;
 
     fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         futures::executor::block_on(Self::from_hf(&device, options))
@@ -144,7 +118,7 @@ impl EmbeddingModel for Qwen3EmbeddingModel {
     }
 
     fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
-        let (repo, _) = options.to_id();
+        let (repo, _) = embed_id(options)?;
         let loader = TokenizerLoader::new(&repo, "tokenizer.json");
         futures::executor::block_on(loader.load())
     }
