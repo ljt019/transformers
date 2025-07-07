@@ -79,21 +79,21 @@ impl Qwen3RerankModel {
 
     /// Rerank a list of documents against a query using cross-encoder architecture.
     /// Returns a list of (document_index, relevance_score) pairs sorted by relevance.
-    pub fn rerank(
+    pub fn rerank_documents(
         &self,
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
-    ) -> anyhow::Result<Vec<(usize, f32)>> {
+    ) -> anyhow::Result<Vec<RerankResult>> {
         let mut scored_docs = Vec::new();
         
         for (idx, document) in documents.iter().enumerate() {
             let score = self.compute_relevance_score(tokenizer, query, document)?;
-            scored_docs.push((idx, score));
+            scored_docs.push(RerankResult { index: idx, score });
         }
         
         // Sort by relevance score in descending order
-        scored_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_docs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         
         Ok(scored_docs)
     }
@@ -171,11 +171,11 @@ impl Qwen3RerankModel {
         tokenizer: &Tokenizer,
         queries: &[&str],
         documents: &[&str],
-    ) -> anyhow::Result<Vec<Vec<(usize, f32)>>> {
+    ) -> anyhow::Result<Vec<Vec<RerankResult>>> {
         let mut results = Vec::new();
         
         for query in queries {
-            let ranked_docs = self.rerank(tokenizer, query, documents)?;
+            let ranked_docs = self.rerank_documents(tokenizer, query, documents)?;
             results.push(ranked_docs);
         }
         
@@ -189,6 +189,7 @@ impl Qwen3RerankModel {
 
 
 use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
+use crate::pipelines::reranker_pipeline::reranker_pipeline::RerankResult;
 
 impl RerankModel for Qwen3RerankModel {
     type Options = Qwen3RerankSize;
@@ -202,13 +203,22 @@ impl RerankModel for Qwen3RerankModel {
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
-    ) -> anyhow::Result<Vec<(usize, f32)>> {
-        self.rerank(tokenizer, query, documents)
+    ) -> anyhow::Result<Vec<RerankResult>> {
+        self.rerank_documents(tokenizer, query, documents)
     }
 
     fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         futures::executor::block_on(loader.load())
+    }
+
+    fn batch_rerank(
+        &self,
+        tokenizer: &Tokenizer,
+        queries: &[&str],
+        documents: &[&str],
+    ) -> anyhow::Result<Vec<Vec<RerankResult>>> {
+        Qwen3RerankModel::batch_rerank(self, tokenizer, queries, documents)
     }
 
     fn device(&self) -> &Device {

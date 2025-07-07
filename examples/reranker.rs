@@ -21,19 +21,19 @@ async fn main() -> Result<()> {
     ];
 
     // Rerank the documents
-    let ranked_results = pipeline.rerank(query, &documents)?;
+    let ranked_results = pipeline.rerank(query, &documents).await?;
 
     println!("Query: {}", query);
     println!("\nRanked documents:");
-    for (i, (doc_idx, score)) in ranked_results.iter().enumerate() {
-        println!("{}. [Score: {:.4}] {}", i + 1, score, documents[*doc_idx]);
+    for (i, result) in ranked_results.iter().enumerate() {
+        println!("{}. [Score: {:.4}] {}", i + 1, result.score, documents[result.index]);
     }
 
     // Get top-3 results
-    let top_3 = pipeline.rerank_top_k(query, &documents, 3)?;
+    let top_3 = pipeline.rerank_top_k(query, &documents, 3).await?;
     println!("\nTop 3 results:");
-    for (i, (doc_idx, score)) in top_3.iter().enumerate() {
-        println!("{}. [Score: {:.4}] {}", i + 1, score, documents[*doc_idx]);
+    for (i, result) in top_3.iter().enumerate() {
+        println!("{}. [Score: {:.4}] {}", i + 1, result.score, documents[result.index]);
     }
 
     Ok(())
