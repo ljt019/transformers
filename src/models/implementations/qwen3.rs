@@ -508,6 +508,29 @@ impl ModelWeights {
         let last = hidden.narrow(1, t - 1, 1)?;
         Ok(last.squeeze(1)?)
     }
+  
+    /// Forward pass returning logits for all tokens in the sequence.
+    pub fn forward_logits(
+        &self,
+        input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (_, t) = input_ids.dims2()?;
+        if t == 0 {
+            return Err(candle_core::Error::Msg("Input tensor has zero sequence length".to_string()));
+        }
+        let mut hidden = self.embeddings.forward(input_ids)?;
+        let mut empty_cache = KvCache::new(2, 1024);
+
+        for layer in self.layers.iter() {
+            hidden = layer.forward(&hidden, attention_mask, 0, &mut empty_cache)?;
+        }
+        hidden = self.final_norm.forward(&hidden)?;
+        
+        // Get logits for all tokens by applying output projection
+        let logits = self.output_projection.forward(&hidden)?;
+        Ok(logits)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
