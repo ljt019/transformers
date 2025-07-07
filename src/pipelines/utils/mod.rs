@@ -21,3 +21,34 @@ pub fn load_device_with(index: Option<usize>) -> anyhow::Result<Device> {
 pub fn load_device() -> anyhow::Result<Device> {
     load_device_with(None)
 }
+
+/// Request for a specific device, used by pipeline builders.
+#[derive(Clone)]
+pub enum DeviceRequest {
+    /// Use CUDA if available, otherwise CPU (default behavior).
+    Default,
+    /// Force CPU even if CUDA is available.
+    Cpu,
+    /// Select a specific CUDA device by index.
+    Cuda(usize),
+    /// Provide an already constructed device.
+    Explicit(Device),
+}
+
+impl Default for DeviceRequest {
+    fn default() -> Self {
+        DeviceRequest::Default
+    }
+}
+
+impl DeviceRequest {
+    /// Resolve the request into an actual [`Device`].
+    pub fn resolve(self) -> anyhow::Result<Device> {
+        match self {
+            DeviceRequest::Default => load_device_with(None),
+            DeviceRequest::Cpu => Ok(Device::Cpu),
+            DeviceRequest::Cuda(i) => Ok(Device::Cuda(CudaDevice::new_with_stream(i)?)),
+            DeviceRequest::Explicit(d) => Ok(d),
+        }
+    }
+}

@@ -165,7 +165,7 @@ impl EmbeddingModel for Qwen3EmbeddingModel {
     }
 
     fn embed(&self, tokenizer: &Tokenizer, text: &str) -> anyhow::Result<Vec<f32>> {
-        self.embed(tokenizer, text)
+        Qwen3EmbeddingModel::embed(self, tokenizer, text)
     }
 
     fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
