@@ -294,7 +294,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                                 ErrorStrategy::Fail => return Err(anyhow::anyhow!(e)),
                                 ErrorStrategy::ReturnToModel => {
                                     // Also ensure error messages end with exactly one newline
-                                    let error_msg = format!("Error: {}", e);
+                                    let error_msg = format!("Error: {e}");
                                     let trimmed_error = error_msg.trim_end_matches('\n');
                                     tool_responses.push(format!(
                                         "<tool_result name=\"{}\">\n{}\n</tool_result>",
@@ -547,7 +547,7 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
                     });
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse tool call JSON: {}", e);
+                    eprintln!("Failed to parse tool call JSON: {e}");
                 }
             }
         }

@@ -39,7 +39,7 @@ impl std::fmt::Display for Qwen3RerankSize {
             Qwen3RerankSize::Size4B => "qwen3-reranker-4b",
             Qwen3RerankSize::Size8B => "qwen3-reranker-8b",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -109,8 +109,7 @@ impl Qwen3RerankModel {
         // Using the exact format from the Qwen3 reranker paper
         let instruction = "Given a query and a document, determine whether the document is relevant to the query";
         let input_text = format!(
-            "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {}\n<Query>: {}\n<Document>: {}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-            instruction, query, document
+            "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
         );
         
         let encoded = tokenizer

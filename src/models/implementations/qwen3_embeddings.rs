@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use tokenizers::Tokenizer;
 
 use super::qwen3::ModelWeights;
@@ -86,7 +86,7 @@ impl Qwen3EmbeddingModel {
     ) -> anyhow::Result<Vec<f32>> {
         const EOS: &str = "<|endoftext|>";
         let input_text = match instruction {
-            Some(instr) => format!("{} {}", instr, text),
+            Some(instr) => format!("{instr} {text}"),
             None => text.to_string(),
         };
         let encoded = tokenizer
@@ -121,38 +121,6 @@ impl Qwen3EmbeddingModel {
 fn l2_normalise(t: Tensor) -> Result<Tensor> {
     let norm = t.sqr()?.sum_keepdim(candle_core::D::Minus1)?.sqrt()?;
     t.broadcast_div(&norm)
-}
-
-fn create_causal_mask(
-    device: &Device,
-    batch_size: usize,
-    seq_len: usize,
-    position_offset: usize,
-) -> Result<Tensor> {
-    let total_len = seq_len + position_offset;
-
-    let row_ids = Tensor::arange(0u32, seq_len as u32, device)?
-        .to_dtype(DType::I64)?
-        .reshape((seq_len, 1))?
-        .broadcast_add(&Tensor::new(&[position_offset as i64], device)?)?;
-
-    let col_ids = Tensor::arange(0u32, total_len as u32, device)?
-        .to_dtype(DType::I64)?
-        .reshape((1, total_len))?;
-
-    let mask = row_ids
-        .broadcast_as(&[seq_len, total_len])?
-        .ge(&col_ids.broadcast_as(&[seq_len, total_len])?)?;
-
-    let neg_inf = Tensor::new(&[f32::NEG_INFINITY], device)?.broadcast_as(&[seq_len, total_len])?;
-    let zero = Tensor::zeros(&[seq_len, total_len], DType::F32, device)?;
-
-    let float_mask = mask.where_cond(&zero, &neg_inf)?;
-
-    float_mask
-        .unsqueeze(0)?
-        .unsqueeze(0)?
-        .broadcast_as(&[batch_size, 1, seq_len, total_len])
 }
 
 use crate::pipelines::embedding_pipeline::embedding_model::EmbeddingModel;

@@ -1,7 +1,6 @@
 // Integration tests for text generation pipeline
 // This is a separate crate that tests the public API
 
-use futures::StreamExt;
 use transformers::pipelines::text_generation_pipeline::*;
 
 #[tokio::test]

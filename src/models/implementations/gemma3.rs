@@ -603,7 +603,7 @@ impl std::fmt::Display for Gemma3Size {
             Gemma3Size::Size12B => "gemma3-12b",
             Gemma3Size::Size27B => "gemma3-27b",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 

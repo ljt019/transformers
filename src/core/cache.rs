@@ -14,13 +14,16 @@ pub trait ModelOptions {
     fn cache_key(&self) -> String;
 }
 
+/// Type alias for the complex cache storage type.
+type CacheStorage = HashMap<(TypeId, String), Arc<dyn Any + Send + Sync>>;
+
 /// A thread-safe cache for model instances.
 ///
 /// The cache stores models by a string key (typically the model size/variant)
 /// and ensures that multiple requests for the same model return clones that
 /// share the underlying weights.
 pub struct ModelCache {
-    cache: Arc<Mutex<HashMap<(TypeId, String), Arc<dyn Any + Send + Sync>>>>,
+    cache: Arc<Mutex<CacheStorage>>,
 }
 
 impl ModelCache {
@@ -113,6 +116,12 @@ impl ModelCache {
     pub async fn len(&self) -> usize {
         let cache = self.cache.lock().await;
         cache.len()
+    }
+
+    /// Check if the cache is empty.
+    pub async fn is_empty(&self) -> bool {
+        let cache = self.cache.lock().await;
+        cache.is_empty()
     }
 }
 
