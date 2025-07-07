@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, Tensor};
 use tokenizers::Tokenizer;
 
 use super::qwen3::ModelWeights;
@@ -105,8 +105,12 @@ impl Qwen3RerankModel {
         query: &str,
         document: &str,
     ) -> anyhow::Result<f32> {
-        // Format input as query-document pair with special tokens
-        let input_text = format!("[CLS] {} [SEP] {} [SEP]", query, document);
+        // Format input using Qwen3 chat template for reranking
+        let instruction = "Decide whether the Document is relevant to the Query";
+        let input_text = format!(
+            "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {}\n<Query>: {}\n<Document>: {}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+            instruction, query, document
+        );
         
         let encoded = tokenizer
             .encode(input_text, false)
@@ -119,22 +123,46 @@ impl Qwen3RerankModel {
         
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         
-        // Forward pass through the model
-        let output = self.weights.forward_embedding(&input, None)?;
+        // Forward pass through the model to get logits
+        let logits = self.weights.forward_logits(&input, None)?;
         
-        // Extract relevance score from the [CLS] token representation
-        // Take the first token (CLS token) and compute a scalar score
-        let cls_output = output.narrow(1, 0, 1)?.squeeze(1)?;
+        // Get the last token logits (where the model would generate "yes" or "no")
+        let (_, seq_len, _vocab_size) = logits.dims3()?;
+        let last_token_logits = logits.narrow(1, seq_len - 1, 1)?.squeeze(1)?;
         
-        // Apply a linear transformation to get relevance score
-        // For simplicity, we'll use the mean of the hidden states and apply sigmoid
-        let score_logit = cls_output.mean_keepdim(0)?;
-        let score = sigmoid(score_logit)?;
+        // Get token ids for "yes" and "no"
+        let yes_token_id = self.get_token_id(tokenizer, "yes")?;
+        let no_token_id = self.get_token_id(tokenizer, "no")?;
         
-        // Convert to scalar
-        let score_scalar = score.to_scalar::<f32>()?;
+        // Extract logits for "yes" and "no" tokens
+        let yes_logit = last_token_logits.narrow(1, yes_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
+        let no_logit = last_token_logits.narrow(1, no_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
         
-        Ok(score_scalar)
+        // Apply softmax to get probabilities
+        let yes_logit_scalar = yes_logit.to_scalar::<f32>()?;
+        let no_logit_scalar = no_logit.to_scalar::<f32>()?;
+        
+        let exp_yes = yes_logit_scalar.exp();
+        let exp_no = no_logit_scalar.exp();
+        let total = exp_yes + exp_no;
+        
+        let yes_prob = exp_yes / total;
+        
+        Ok(yes_prob)
+    }
+    
+    /// Get token ID for a given text string
+    fn get_token_id(&self, tokenizer: &Tokenizer, text: &str) -> anyhow::Result<u32> {
+        let encoded = tokenizer
+            .encode(text, false)
+            .map_err(anyhow::Error::msg)?;
+        let ids = encoded.get_ids();
+        
+        if ids.is_empty() {
+            return Err(anyhow::anyhow!("Failed to tokenize text: {}", text));
+        }
+        
+        Ok(ids[0])
     }
 
     /// Batch reranking for better efficiency with multiple queries.
@@ -159,14 +187,6 @@ impl Qwen3RerankModel {
     }
 }
 
-/// Sigmoid activation function
-fn sigmoid(x: Tensor) -> Result<Tensor> {
-    let neg_x = x.neg()?;
-    let exp_neg_x = neg_x.exp()?;
-    let one = Tensor::ones_like(&x)?;
-    let denominator = one.add(&exp_neg_x)?;
-    one.div(&denominator)
-}
 
 use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
 
