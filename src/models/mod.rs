@@ -6,4 +6,13 @@ pub mod implementations;
 pub use components::{QMatMul, RmsNorm, VarBuilder, repeat_kv};
 
 // Re-export model implementations
-pub use implementations::{Gemma3Model, Gemma3Size, ModernBertModel, ModernBertSize, Qwen3Model, Qwen3Size};
+pub use implementations::{
+    Gemma3Model,
+    Gemma3Size,
+    ModernBertModel,
+    ModernBertSize,
+    Qwen3Model,
+    Qwen3Size,
+    Qwen3EmbeddingModel,
+    Qwen3EmbeddingSize,
+};
