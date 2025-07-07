@@ -1,0 +1,217 @@
+use std::sync::Arc;
+
+use candle_core::{Device, Tensor};
+use tokenizers::Tokenizer;
+
+use super::qwen3::ModelWeights;
+use crate::loaders::{GgufModelLoader, TokenizerLoader};
+
+#[derive(Debug, Clone, Copy)]
+pub enum Qwen3RerankSize {
+    Size0_6B,
+    Size4B,
+    Size8B,
+}
+
+impl Qwen3RerankSize {
+    pub fn to_id(&self) -> (String, String) {
+        match self {
+            Qwen3RerankSize::Size0_6B => (
+                "DevQuasar/Qwen.Qwen3-Reranker-0.6B-GGUF".into(),
+                "Qwen.Qwen3-Reranker-0.6B.Q4_K_M.gguf".into(),
+            ),
+            Qwen3RerankSize::Size4B => (
+                "Mungert/Qwen3-Reranker-4B-GGUF".into(),
+                "Qwen3-Reranker-4B-q4_k_m.gguf".into(),
+            ),
+            Qwen3RerankSize::Size8B => (
+                "QuantFactory/Qwen3-Reranker-8B-GGUF".into(),
+                "Qwen3-Reranker-8B.Q4_K_M.gguf".into(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for Qwen3RerankSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Qwen3RerankSize::Size0_6B => "qwen3-reranker-0.6b",
+            Qwen3RerankSize::Size4B => "qwen3-reranker-4b",
+            Qwen3RerankSize::Size8B => "qwen3-reranker-8b",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl crate::core::ModelOptions for Qwen3RerankSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
+fn rerank_id(size: Qwen3RerankSize) -> anyhow::Result<(String, String)> {
+    Ok(size.to_id())
+}
+
+/// Qwen3 model for reranking text pairs using cross-encoder architecture.
+#[derive(Clone)]
+pub struct Qwen3RerankModel {
+    weights: Arc<ModelWeights>,
+    device: Device,
+}
+
+impl Qwen3RerankModel {
+    pub async fn from_hf(device: &Device, size: Qwen3RerankSize) -> anyhow::Result<Self> {
+        let (repo_id, file_name) = rerank_id(size)?;
+        let loader = GgufModelLoader::new(&repo_id, &file_name);
+        let (mut file, content) = loader.load().await?;
+        let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
+        Ok(Self {
+            weights,
+            device: device.clone(),
+        })
+    }
+
+    pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
+        let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        loader.load().await
+    }
+
+    /// Rerank a list of documents against a query using cross-encoder architecture.
+    /// Returns a list of (document_index, relevance_score) pairs sorted by relevance.
+    pub fn rerank(
+        &self,
+        tokenizer: &Tokenizer,
+        query: &str,
+        documents: &[&str],
+    ) -> anyhow::Result<Vec<(usize, f32)>> {
+        let mut scored_docs = Vec::new();
+        
+        for (idx, document) in documents.iter().enumerate() {
+            let score = self.compute_relevance_score(tokenizer, query, document)?;
+            scored_docs.push((idx, score));
+        }
+        
+        // Sort by relevance score in descending order
+        scored_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        Ok(scored_docs)
+    }
+
+    /// Compute relevance score for a query-document pair using cross-encoder.
+    fn compute_relevance_score(
+        &self,
+        tokenizer: &Tokenizer,
+        query: &str,
+        document: &str,
+    ) -> anyhow::Result<f32> {
+        // Format input using Qwen3 chat template for reranking
+        let instruction = "Decide whether the Document is relevant to the Query";
+        let input_text = format!(
+            "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {}\n<Query>: {}\n<Document>: {}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+            instruction, query, document
+        );
+        
+        let encoded = tokenizer
+            .encode(input_text, false)
+            .map_err(anyhow::Error::msg)?;
+        let ids = encoded.get_ids();
+        
+        if ids.is_empty() {
+            return Err(anyhow::anyhow!("Tokenizer produced empty token sequence"));
+        }
+        
+        let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
+        
+        // Forward pass through the model to get logits
+        let logits = self.weights.forward_logits(&input, None)?;
+        
+        // Get the last token logits (where the model would generate "yes" or "no")
+        let (_, seq_len, _vocab_size) = logits.dims3()?;
+        let last_token_logits = logits.narrow(1, seq_len - 1, 1)?.squeeze(1)?;
+        
+        // Get token ids for "yes" and "no"
+        let yes_token_id = self.get_token_id(tokenizer, "yes")?;
+        let no_token_id = self.get_token_id(tokenizer, "no")?;
+        
+        // Extract logits for "yes" and "no" tokens
+        let yes_logit = last_token_logits.narrow(1, yes_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
+        let no_logit = last_token_logits.narrow(1, no_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
+        
+        // Apply softmax to get probabilities
+        let yes_logit_scalar = yes_logit.to_scalar::<f32>()?;
+        let no_logit_scalar = no_logit.to_scalar::<f32>()?;
+        
+        let exp_yes = yes_logit_scalar.exp();
+        let exp_no = no_logit_scalar.exp();
+        let total = exp_yes + exp_no;
+        
+        let yes_prob = exp_yes / total;
+        
+        Ok(yes_prob)
+    }
+    
+    /// Get token ID for a given text string
+    fn get_token_id(&self, tokenizer: &Tokenizer, text: &str) -> anyhow::Result<u32> {
+        let encoded = tokenizer
+            .encode(text, false)
+            .map_err(anyhow::Error::msg)?;
+        let ids = encoded.get_ids();
+        
+        if ids.is_empty() {
+            return Err(anyhow::anyhow!("Failed to tokenize text: {}", text));
+        }
+        
+        Ok(ids[0])
+    }
+
+    /// Batch reranking for better efficiency with multiple queries.
+    pub fn batch_rerank(
+        &self,
+        tokenizer: &Tokenizer,
+        queries: &[&str],
+        documents: &[&str],
+    ) -> anyhow::Result<Vec<Vec<(usize, f32)>>> {
+        let mut results = Vec::new();
+        
+        for query in queries {
+            let ranked_docs = self.rerank(tokenizer, query, documents)?;
+            results.push(ranked_docs);
+        }
+        
+        Ok(results)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
+
+use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
+
+impl RerankModel for Qwen3RerankModel {
+    type Options = Qwen3RerankSize;
+
+    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        futures::executor::block_on(Self::from_hf(&device, options))
+    }
+
+    fn rerank(
+        &self,
+        tokenizer: &Tokenizer,
+        query: &str,
+        documents: &[&str],
+    ) -> anyhow::Result<Vec<(usize, f32)>> {
+        self.rerank(tokenizer, query, documents)
+    }
+
+    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
+        let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
+        futures::executor::block_on(loader.load())
+    }
+
+    fn device(&self) -> &Device {
+        &self.device
+    }
+}
