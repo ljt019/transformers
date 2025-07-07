@@ -27,6 +27,6 @@ candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 pin-project-lite = "0.2"
-hf-hub = "0.4.2"
+hf-hub = { version = "0.4.3", features = ["tokio"] }
 
 [dev-dependencies]
