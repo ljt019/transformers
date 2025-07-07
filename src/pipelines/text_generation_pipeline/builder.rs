@@ -1,6 +1,6 @@
 use crate::core::{global_cache, ModelOptions};
 use crate::models::{Gemma3Model, Gemma3Size, Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::load_device_with;
+use crate::pipelines::utils::{load_device_with, DeviceRequest};
 
 use super::parser::XmlParserBuilder;
 use super::text_generation_model::TextGenerationModel;
@@ -19,13 +19,6 @@ pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     top_k: Option<usize>,
     min_p: Option<f64>,
     device_request: DeviceRequest,
-}
-
-enum DeviceRequest {
-    Default,
-    Cpu,
-    Cuda(usize),
-    Explicit(Device),
 }
 
 impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
