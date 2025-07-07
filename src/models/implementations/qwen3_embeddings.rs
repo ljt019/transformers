@@ -4,24 +4,47 @@ use candle_core::{DType, Device, Result, Tensor};
 use tokenizers::Tokenizer;
 
 use super::qwen3::ModelWeights;
-use super::qwen3::Qwen3Size;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Qwen3EmbeddingSize {
+    Size0_6B,
+    Size4B,
+    Size8B,
+}
+
+impl std::fmt::Display for Qwen3EmbeddingSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Qwen3EmbeddingSize::Size0_6B => write!(f, "0.6B"),
+            Qwen3EmbeddingSize::Size4B => write!(f, "4B"),
+            Qwen3EmbeddingSize::Size8B => write!(f, "8B"),
+        }
+    }
+}
+
+// Allow embedding size to be used as a cache key just like other model option enums.
+impl crate::core::ModelOptions for Qwen3EmbeddingSize {
+    fn cache_key(&self) -> String {
+        self.to_string()
+    }
+}
+
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
 
-fn embed_id(size: Qwen3Size) -> anyhow::Result<(String, String)> {
+fn embed_id(size: Qwen3EmbeddingSize) -> (String, String) {
     match size {
-        Qwen3Size::Size0_6B => Ok((
+        Qwen3EmbeddingSize::Size0_6B => (
             "Qwen/Qwen3-Embedding-0.6B-GGUF".into(),
             "Qwen3-Embedding-0.6B-Q8_0.gguf".into(),
-        )),
-        Qwen3Size::Size4B => Ok((
+        ),
+        Qwen3EmbeddingSize::Size4B => (
             "Qwen/Qwen3-Embedding-4B-GGUF".into(),
             "Qwen3-Embedding-4B-Q8_0.gguf".into(),
-        )),
-        Qwen3Size::Size8B => Ok((
+        ),
+        Qwen3EmbeddingSize::Size8B => (
             "Qwen/Qwen3-Embedding-8B-GGUF".into(),
             "Qwen3-Embedding-8B-Q8_0.gguf".into(),
-        )),
-        other => anyhow::bail!("No embedding weights available for {other}"),
+        ),
     }
 }
 
@@ -33,8 +56,8 @@ pub struct Qwen3EmbeddingModel {
 }
 
 impl Qwen3EmbeddingModel {
-    pub async fn from_hf(device: &Device, size: Qwen3Size) -> anyhow::Result<Self> {
-        let (repo_id, file_name) = embed_id(size)?;
+    pub async fn from_hf(device: &Device, size: Qwen3EmbeddingSize) -> anyhow::Result<Self> {
+        let (repo_id, file_name) = embed_id(size);
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
@@ -51,13 +74,30 @@ impl Qwen3EmbeddingModel {
 
     /// Generate an embedding for the provided text.
     pub fn embed(&self, tokenizer: &Tokenizer, text: &str) -> anyhow::Result<Vec<f32>> {
+        self.embed_with_instruction(tokenizer, None, text)
+    }
+
+    /// Generate an embedding with optional instruction concatenation.
+    pub fn embed_with_instruction(
+        &self,
+        tokenizer: &Tokenizer,
+        instruction: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<Vec<f32>> {
         const EOS: &str = "<|endoftext|>";
+        let input_text = match instruction {
+            Some(instr) => format!("{} {}", instr, text),
+            None => text.to_string(),
+        };
         let encoded = tokenizer
-            .encode(format!("{text}{EOS}"), false)
+            .encode(format!("{input_text}{EOS}"), false)
             .map_err(anyhow::Error::msg)?;
         let ids = encoded.get_ids();
         if ids.is_empty() {
-            return Err(anyhow::anyhow!("Tokenizer produced empty token sequence for text: '{}'", text));
+            return Err(anyhow::anyhow!(
+                "Tokenizer produced empty token sequence for text: '{}'",
+                input_text
+            ));
         }
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         // Attention mask is not required for a single-sequence forward pass. Omitting it avoids
@@ -118,7 +158,7 @@ fn create_causal_mask(
 use crate::pipelines::embedding_pipeline::embedding_model::EmbeddingModel;
 
 impl EmbeddingModel for Qwen3EmbeddingModel {
-    type Options = Qwen3Size;
+    type Options = Qwen3EmbeddingSize;
 
     fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         futures::executor::block_on(Self::from_hf(&device, options))
@@ -128,7 +168,7 @@ impl EmbeddingModel for Qwen3EmbeddingModel {
         self.embed(tokenizer, text)
     }
 
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
+    fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         futures::executor::block_on(loader.load())
     }

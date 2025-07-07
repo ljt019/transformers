@@ -7,6 +7,6 @@ pub use embedding_model::EmbeddingModel;
 pub use embedding_pipeline::EmbeddingPipeline;
 
 pub use crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingModel;
-pub use crate::models::implementations::qwen3::Qwen3Size;
+pub use crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingSize;
 
 pub use anyhow::Result;

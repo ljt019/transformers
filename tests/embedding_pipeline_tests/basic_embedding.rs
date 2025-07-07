@@ -2,7 +2,7 @@ use transformers::pipelines::embedding_pipeline::*;
 
 #[tokio::test]
 async fn basic_embedding() -> anyhow::Result<()> {
-    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3EmbeddingSize::Size0_6B)
         .build()
         .await?;
     let emb = pipeline.embed("hello world")?;
@@ -12,7 +12,7 @@ async fn basic_embedding() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn select_cpu_device() -> anyhow::Result<()> {
-    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3EmbeddingSize::Size0_6B)
         .cpu()
         .build()
         .await?;

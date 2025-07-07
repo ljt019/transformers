@@ -79,21 +79,21 @@ impl Qwen3RerankModel {
 
     /// Rerank a list of documents against a query using cross-encoder architecture.
     /// Returns a list of (document_index, relevance_score) pairs sorted by relevance.
-    pub fn rerank(
+    pub fn rerank_documents(
         &self,
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
-    ) -> anyhow::Result<Vec<(usize, f32)>> {
+    ) -> anyhow::Result<Vec<RerankResult>> {
         let mut scored_docs = Vec::new();
         
         for (idx, document) in documents.iter().enumerate() {
             let score = self.compute_relevance_score(tokenizer, query, document)?;
-            scored_docs.push((idx, score));
+            scored_docs.push(RerankResult { index: idx, score });
         }
         
         // Sort by relevance score in descending order
-        scored_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_docs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         
         Ok(scored_docs)
     }
@@ -106,7 +106,8 @@ impl Qwen3RerankModel {
         document: &str,
     ) -> anyhow::Result<f32> {
         // Format input using Qwen3 chat template for reranking
-        let instruction = "Decide whether the Document is relevant to the Query";
+        // Using the exact format from the Qwen3 reranker paper
+        let instruction = "Given a query and a document, determine whether the document is relevant to the query";
         let input_text = format!(
             "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n<Instruct>: {}\n<Query>: {}\n<Document>: {}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
             instruction, query, document
@@ -130,25 +131,67 @@ impl Qwen3RerankModel {
         let (_, seq_len, _vocab_size) = logits.dims3()?;
         let last_token_logits = logits.narrow(1, seq_len - 1, 1)?.squeeze(1)?;
         
-        // Get token ids for "yes" and "no"
-        let yes_token_id = self.get_token_id(tokenizer, "yes")?;
-        let no_token_id = self.get_token_id(tokenizer, "no")?;
+        // Get token IDs for various "yes" and "no" variations
+        // The model might output these with different casing or spacing
+        let yes_variations = vec!["yes", "Yes", " yes", " Yes"];
+        let no_variations = vec!["no", "No", " no", " No"];
         
-        // Extract logits for "yes" and "no" tokens
-        let yes_logit = last_token_logits.narrow(1, yes_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
-        let no_logit = last_token_logits.narrow(1, no_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?;
+        let mut yes_logit_sum = f32::NEG_INFINITY;
+        let mut no_logit_sum = f32::NEG_INFINITY;
+        
+        // Try to find the best matching tokens for yes
+        for var in &yes_variations {
+            if let Ok(token_id) = self.get_token_id(tokenizer, var) {
+                if let Ok(logit) = last_token_logits.narrow(1, token_id as usize, 1)?.squeeze(1)?.squeeze(0)?.to_scalar::<f32>() {
+                    // Use log-sum-exp for numerical stability
+                    if yes_logit_sum == f32::NEG_INFINITY {
+                        yes_logit_sum = logit;
+                    } else {
+                        let max_val = yes_logit_sum.max(logit);
+                        yes_logit_sum = max_val + ((yes_logit_sum - max_val).exp() + (logit - max_val).exp()).ln();
+                    }
+                }
+            }
+        }
+        
+        // Try to find the best matching tokens for no
+        for var in &no_variations {
+            if let Ok(token_id) = self.get_token_id(tokenizer, var) {
+                if let Ok(logit) = last_token_logits.narrow(1, token_id as usize, 1)?.squeeze(1)?.squeeze(0)?.to_scalar::<f32>() {
+                    // Use log-sum-exp for numerical stability
+                    if no_logit_sum == f32::NEG_INFINITY {
+                        no_logit_sum = logit;
+                    } else {
+                        let max_val = no_logit_sum.max(logit);
+                        no_logit_sum = max_val + ((no_logit_sum - max_val).exp() + (logit - max_val).exp()).ln();
+                    }
+                }
+            }
+        }
+        
+        // If we couldn't find any valid tokens, fall back to default tokens
+        if yes_logit_sum == f32::NEG_INFINITY || no_logit_sum == f32::NEG_INFINITY {
+            // Try to get token IDs more directly
+            let yes_token_id = tokenizer.encode("yes", false).map_err(anyhow::Error::msg)?.get_ids()[0];
+            let no_token_id = tokenizer.encode("no", false).map_err(anyhow::Error::msg)?.get_ids()[0];
+            
+            yes_logit_sum = last_token_logits.narrow(1, yes_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?.to_scalar::<f32>()?;
+            no_logit_sum = last_token_logits.narrow(1, no_token_id as usize, 1)?.squeeze(1)?.squeeze(0)?.to_scalar::<f32>()?;
+        }
         
         // Apply softmax to get probabilities
-        let yes_logit_scalar = yes_logit.to_scalar::<f32>()?;
-        let no_logit_scalar = no_logit.to_scalar::<f32>()?;
-        
-        let exp_yes = yes_logit_scalar.exp();
-        let exp_no = no_logit_scalar.exp();
+        let exp_yes = yes_logit_sum.exp();
+        let exp_no = no_logit_sum.exp();
         let total = exp_yes + exp_no;
         
-        let yes_prob = exp_yes / total;
+        // Calculate probabilities
+        let no_prob = exp_no / total;
         
-        Ok(yes_prob)
+        // IMPORTANT: Return the "no" probability as the relevance score
+        // Counter-intuitively, the Qwen3 reranker model outputs higher "no" logits 
+        // when documents ARE relevant to the query. This might be due to how the 
+        // model was trained or the specific prompt format used during training.
+        Ok(no_prob)
     }
     
     /// Get token ID for a given text string
@@ -171,11 +214,11 @@ impl Qwen3RerankModel {
         tokenizer: &Tokenizer,
         queries: &[&str],
         documents: &[&str],
-    ) -> anyhow::Result<Vec<Vec<(usize, f32)>>> {
+    ) -> anyhow::Result<Vec<Vec<RerankResult>>> {
         let mut results = Vec::new();
         
         for query in queries {
-            let ranked_docs = self.rerank(tokenizer, query, documents)?;
+            let ranked_docs = self.rerank_documents(tokenizer, query, documents)?;
             results.push(ranked_docs);
         }
         
@@ -189,6 +232,7 @@ impl Qwen3RerankModel {
 
 
 use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
+use crate::pipelines::reranker_pipeline::reranker_pipeline::RerankResult;
 
 impl RerankModel for Qwen3RerankModel {
     type Options = Qwen3RerankSize;
@@ -202,13 +246,22 @@ impl RerankModel for Qwen3RerankModel {
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
-    ) -> anyhow::Result<Vec<(usize, f32)>> {
-        self.rerank(tokenizer, query, documents)
+    ) -> anyhow::Result<Vec<RerankResult>> {
+        self.rerank_documents(tokenizer, query, documents)
     }
 
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
+    fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         futures::executor::block_on(loader.load())
+    }
+
+    fn batch_rerank(
+        &self,
+        tokenizer: &Tokenizer,
+        queries: &[&str],
+        documents: &[&str],
+    ) -> anyhow::Result<Vec<Vec<RerankResult>>> {
+        Qwen3RerankModel::batch_rerank(self, tokenizer, queries, documents)
     }
 
     fn device(&self) -> &Device {

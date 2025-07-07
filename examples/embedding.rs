@@ -2,7 +2,7 @@ use transformers::pipelines::embedding_pipeline::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
+    let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3EmbeddingSize::Size0_6B)
         .build()
         .await?;
 
