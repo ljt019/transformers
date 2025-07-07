@@ -1,5 +1,6 @@
 use super::embedding_model::EmbeddingModel;
 use super::embedding_pipeline::EmbeddingPipeline;
+use std::sync::Arc;
 use crate::core::{global_cache, ModelOptions};
 use crate::pipelines::utils::DeviceRequest;
 
@@ -42,7 +43,7 @@ impl<M: EmbeddingModel> EmbeddingPipelineBuilder<M> {
             .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
             .await?;
         let tokenizer = M::get_tokenizer(self.options)?;
-        Ok(EmbeddingPipeline { model, tokenizer })
+        Ok(EmbeddingPipeline { model: Arc::new(model), tokenizer })
     }
 }
 

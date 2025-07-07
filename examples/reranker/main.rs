@@ -6,13 +6,6 @@ use transformers::pipelines::reranker_pipeline::*;
 use std::fs;
 use std::path::Path;
 
-fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
-    dot / (norm_a * norm_b)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("Building pipelines...");
@@ -75,10 +68,10 @@ async fn main() -> Result<()> {
     println!("Embedding corpus...");
 
     /* ---------- embed the corpus once up front ---------- */
-    let doc_embeddings: Vec<Vec<f32>> = documents
-        .iter()
-        .map(|doc| embed_pipe.embed(doc).expect("embedding failed"))
-        .collect();
+    let mut doc_embeddings = Vec::new();
+    for doc in &documents {
+        doc_embeddings.push(embed_pipe.embed(doc).await.expect("embedding failed"));
+    }
 
     println!("Corpus embedded!");
 
@@ -86,7 +79,7 @@ async fn main() -> Result<()> {
     let query = "How do neural networks and deep learning work?";
     println!("🔍 Query: \"{}\"", query);
 
-    let query_emb = embed_pipe.embed(query)?;
+    let query_emb = embed_pipe.embed(query).await?;
 
     // Helper function to truncate documents for display
     fn truncate_doc(doc: &str, max_chars: usize) -> String {
@@ -101,7 +94,7 @@ async fn main() -> Result<()> {
     let mut scored: Vec<(usize, f32)> = doc_embeddings
         .iter()
         .enumerate()
-        .map(|(i, emb)| (i, cosine_sim(&query_emb, emb)))
+        .map(|(i, emb)| (i, EmbeddingPipeline::<Qwen3EmbeddingModel>::cosine_similarity(&query_emb, emb)))
         .collect();
 
     // higher cosine = more similar

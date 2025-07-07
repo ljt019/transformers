@@ -6,7 +6,7 @@ async fn batch_embedding() -> anyhow::Result<()> {
         .build()
         .await?;
     let inputs = ["hello", "world"];
-    let embs = pipeline.embed_batch(&inputs)?;
+    let embs = pipeline.embed_batch(&inputs).await?;
     assert_eq!(embs.len(), inputs.len());
     for emb in embs {
         assert!(!emb.is_empty());

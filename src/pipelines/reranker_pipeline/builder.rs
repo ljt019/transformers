@@ -1,5 +1,6 @@
 use super::reranker_model::RerankModel;
 use super::reranker_pipeline::RerankPipeline;
+use std::sync::Arc;
 use crate::core::{global_cache, ModelOptions};
 use crate::pipelines::utils::DeviceRequest;
 
@@ -42,7 +43,7 @@ impl<M: RerankModel> RerankPipelineBuilder<M> {
             .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
             .await?;
         let tokenizer = M::get_tokenizer(self.options)?;
-        Ok(RerankPipeline { model, tokenizer })
+        Ok(RerankPipeline { model: Arc::new(model), tokenizer })
     }
 }
 
