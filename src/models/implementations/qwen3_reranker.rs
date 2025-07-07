@@ -207,7 +207,7 @@ impl RerankModel for Qwen3RerankModel {
         self.rerank_documents(tokenizer, query, documents)
     }
 
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer> {
+    fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
         futures::executor::block_on(loader.load())
     }
