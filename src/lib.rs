@@ -24,4 +24,5 @@ pub use models::implementations::{
     Qwen3Model,
     Qwen3Size,
     Qwen3EmbeddingModel,
+    Qwen3RerankModel,
 };
