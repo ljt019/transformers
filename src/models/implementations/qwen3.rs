@@ -487,6 +487,27 @@ impl ModelWeights {
             .unsqueeze(0)?
             .broadcast_as(&[batch_size, 1, seq_len, total_len])
     }
+
+    /// Forward pass that returns `[batch, hidden]` embeddings.
+    pub fn forward_embedding(
+        &self,
+        input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (_, t) = input_ids.dims2()?;
+        if t == 0 {
+            return Err(candle_core::Error::Msg("Input tensor has zero sequence length".to_string()));
+        }
+        let mut hidden = self.embeddings.forward(input_ids)?;
+        let mut empty_cache = KvCache::new(2, 1024);
+
+        for layer in self.layers.iter() {
+            hidden = layer.forward(&hidden, attention_mask, 0, &mut empty_cache)?;
+        }
+        hidden = self.final_norm.forward(&hidden)?;
+        let last = hidden.narrow(1, t - 1, 1)?;
+        Ok(last.squeeze(1)?)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
