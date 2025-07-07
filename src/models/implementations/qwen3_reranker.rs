@@ -128,7 +128,7 @@ impl Qwen3RerankModel {
         
         // Apply a linear transformation to get relevance score
         // For simplicity, we'll use the mean of the hidden states and apply sigmoid
-        let score_logit = cls_output.mean_keepdim(1)?;
+        let score_logit = cls_output.mean_keepdim(0)?;
         let score = sigmoid(score_logit)?;
         
         // Convert to scalar
