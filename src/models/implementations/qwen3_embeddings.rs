@@ -56,11 +56,20 @@ impl Qwen3EmbeddingModel {
             .encode(format!("{text}{EOS}"), false)
             .map_err(anyhow::Error::msg)?;
         let ids = encoded.get_ids();
+        if ids.is_empty() {
+            return Err(anyhow::anyhow!("Tokenizer produced empty token sequence for text: '{}'", text));
+        }
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         // Attention mask is not required for a single-sequence forward pass. Omitting it avoids
         // shape-broadcast issues on very short inputs.
         let emb = self.weights.forward_embedding(&input, None)?;
         let emb = l2_normalise(emb)?;
+        // Squeeze the batch dimension if it exists
+        let emb = if emb.dims().len() > 1 && emb.dims()[0] == 1 {
+            emb.squeeze(0)?
+        } else {
+            emb
+        };
         Ok(emb.to_vec1::<f32>()?)
     }
 
