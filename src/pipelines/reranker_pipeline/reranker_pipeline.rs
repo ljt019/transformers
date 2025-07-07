@@ -1,5 +1,6 @@
 use super::reranker_model::RerankModel;
 use tokenizers::Tokenizer;
+use std::sync::Arc;
 
 /// Result of reranking a single document.
 #[derive(Debug, Clone, Copy)]
@@ -11,20 +12,44 @@ pub struct RerankResult {
 }
 
 pub struct RerankPipeline<M: RerankModel> {
-    pub(crate) model: M,
+    pub(crate) model: Arc<M>,
     pub(crate) tokenizer: Tokenizer,
 }
 
-impl<M: RerankModel> RerankPipeline<M> {
+impl<M> RerankPipeline<M>
+where
+    M: RerankModel + Send + Sync + 'static,
+{
     /// Rerank a list of documents against a query.
     /// Returns a list of (document_index, relevance_score) pairs sorted by relevance.
-    pub async fn rerank(&self, query: &str, documents: &[&str]) -> anyhow::Result<Vec<RerankResult>> {
-        self.model.rerank(&self.tokenizer, query, documents)
+    pub async fn rerank(&self, query: &str, documents: &[&str]) -> anyhow::Result<Vec<RerankResult>>
+    {
+        let model = Arc::clone(&self.model);
+        let tokenizer = self.tokenizer.clone();
+        let query_owned = query.to_owned();
+        let docs: Vec<String> = documents.iter().map(|d| d.to_string()).collect();
+        tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = docs.iter().map(|d| d.as_str()).collect();
+            model.rerank(&tokenizer, &query_owned, &refs)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?
     }
 
     /// Batch reranking for multiple queries against the same set of documents.
-    pub async fn batch_rerank(&self, queries: &[&str], documents: &[&str]) -> anyhow::Result<Vec<Vec<RerankResult>>> {
-        self.model.batch_rerank(&self.tokenizer, queries, documents)
+    pub async fn batch_rerank(&self, queries: &[&str], documents: &[&str]) -> anyhow::Result<Vec<Vec<RerankResult>>>
+    {
+        let model = Arc::clone(&self.model);
+        let tokenizer = self.tokenizer.clone();
+        let queries_owned: Vec<String> = queries.iter().map(|q| q.to_string()).collect();
+        let docs_owned: Vec<String> = documents.iter().map(|d| d.to_string()).collect();
+        tokio::task::spawn_blocking(move || {
+            let q_refs: Vec<&str> = queries_owned.iter().map(|q| q.as_str()).collect();
+            let d_refs: Vec<&str> = docs_owned.iter().map(|d| d.as_str()).collect();
+            model.batch_rerank(&tokenizer, &q_refs, &d_refs)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?
     }
 
     /// Get the top-k most relevant documents for a query.
