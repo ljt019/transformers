@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
     println!("Building pipeline...");
 
     /* ---------- build the pipeline ---------- */
-    let rerank_pipe = RerankPipelineBuilder::qwen3(Qwen3RerankSize::Size4B)
+    let rerank_pipe = RerankPipelineBuilder::qwen3(Qwen3RerankSize::Size0_6B)
         .cpu()
         .build()
         .await?;

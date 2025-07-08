@@ -44,8 +44,9 @@ where
     }
     
     fn construct_pipeline(model: M, tokenizer: tokenizers::Tokenizer) -> anyhow::Result<Self::Pipeline> {
+        use std::sync::Mutex;
         Ok(RerankPipeline {
-            model: Arc::new(model),
+            model: Arc::new(Mutex::new(model)),
             tokenizer,
         })
     }

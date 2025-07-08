@@ -1,5 +1,5 @@
 use std::io::{Read, Seek};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use candle_core::quantized::{gguf_file, QMatMul, QTensor};
 use candle_core::{DType, Device, Result, Tensor};
@@ -475,7 +475,7 @@ impl ModelWeights {
 /// Qwen3 model for reranking text pairs using cross-encoder architecture.
 #[derive(Clone)]
 pub struct Qwen3RerankModel {
-    weights: Arc<Mutex<ModelWeights>>,
+    weights: ModelWeights,
     device: Device,
 }
 
@@ -484,9 +484,7 @@ impl Qwen3RerankModel {
         let (repo_id, file_name) = size.to_id();
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
-        let weights = Arc::new(Mutex::new(ModelWeights::from_gguf(
-            content, &mut file, device,
-        )?));
+        let weights = ModelWeights::from_gguf(content, &mut file, device)?;
         Ok(Self {
             weights,
             device: device.clone(),
@@ -501,7 +499,7 @@ impl Qwen3RerankModel {
     /// Rerank a list of documents against a query using cross-encoder architecture.
     /// Returns a list of (document_index, relevance_score) pairs sorted by relevance.
     pub fn rerank_documents(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
@@ -525,7 +523,7 @@ impl Qwen3RerankModel {
 
     /// Compute relevance score for a query-document pair using cross-encoder.
     fn compute_relevance_score(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         query: &str,
         document: &str,
@@ -549,7 +547,7 @@ impl Qwen3RerankModel {
         // Run a single forward pass to get logits
         let input = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
 
-        let logits = self.weights.lock().unwrap().forward(&input, 0)?;
+        let logits = self.weights.forward(&input, 0)?;
         let logits = logits.squeeze(0)?;
 
         // Get token IDs for "yes" and "no" for scoring
@@ -569,7 +567,7 @@ impl Qwen3RerankModel {
 
     /// Batch reranking for better efficiency with multiple queries.
     pub fn batch_rerank(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         queries: &[&str],
         documents: &[&str],
@@ -593,11 +591,21 @@ impl RerankModel for Qwen3RerankModel {
     type Options = Qwen3RerankSize;
 
     fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
-        futures::executor::block_on(Self::from_hf(&device, options))
+        // Check if we're in a tokio runtime
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // If we're in a runtime, spawn a blocking task
+            tokio::task::block_in_place(|| {
+                handle.block_on(Self::from_hf(&device, options))
+            })
+        } else {
+            // If not in a runtime, create a new one
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(Self::from_hf(&device, options))
+        }
     }
 
     fn rerank(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
@@ -607,11 +615,22 @@ impl RerankModel for Qwen3RerankModel {
 
     fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
-        futures::executor::block_on(loader.load())
+        
+        // Check if we're in a tokio runtime
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            // If we're in a runtime, spawn a blocking task
+            tokio::task::block_in_place(|| {
+                handle.block_on(loader.load())
+            })
+        } else {
+            // If not in a runtime, create a new one
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(loader.load())
+        }
     }
 
     fn batch_rerank(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         queries: &[&str],
         documents: &[&str],

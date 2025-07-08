@@ -11,14 +11,14 @@ pub trait RerankModel {
         Self: Sized;
     
     fn rerank(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         query: &str,
         documents: &[&str],
     ) -> anyhow::Result<Vec<RerankResult>>;
 
     fn batch_rerank(
-        &self,
+        &mut self,
         tokenizer: &Tokenizer,
         queries: &[&str],
         documents: &[&str],
