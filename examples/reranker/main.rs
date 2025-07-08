@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     println!("📚 Loaded {} documents from corpus\n", documents.len());
 
     /* ---------- incoming query ---------- */
-    let query = "How do neural networks and deep learning work?";
+    let query = "I want to learn about machine learning.";
     println!("🔍 Query: \"{}\"", query);
 
     // Helper function to truncate documents for display
