@@ -1,6 +1,6 @@
 use super::model::RerankModel;
 use tokenizers::Tokenizer;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Result of reranking a single document.
 #[derive(Debug, Clone, Copy)]
@@ -12,7 +12,7 @@ pub struct RerankResult {
 }
 
 pub struct RerankPipeline<M: RerankModel> {
-    pub(crate) model: Arc<M>,
+    pub(crate) model: Arc<Mutex<M>>,
     pub(crate) tokenizer: Tokenizer,
 }
 
@@ -30,7 +30,7 @@ where
         let docs: Vec<String> = documents.iter().map(|d| d.to_string()).collect();
         tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = docs.iter().map(|d| d.as_str()).collect();
-            model.rerank(&tokenizer, &query_owned, &refs)
+            model.lock().unwrap().rerank(&tokenizer, &query_owned, &refs)
         })
         .await
         .map_err(|e| anyhow::anyhow!(e))?
@@ -46,7 +46,7 @@ where
         tokio::task::spawn_blocking(move || {
             let q_refs: Vec<&str> = queries_owned.iter().map(|q| q.as_str()).collect();
             let d_refs: Vec<&str> = docs_owned.iter().map(|d| d.as_str()).collect();
-            model.batch_rerank(&tokenizer, &q_refs, &d_refs)
+            model.lock().unwrap().batch_rerank(&tokenizer, &q_refs, &d_refs)
         })
         .await
         .map_err(|e| anyhow::anyhow!(e))?
@@ -67,7 +67,7 @@ where
         let docs: Vec<String> = documents.iter().map(|d| d.to_string()).collect();
         let ranked = tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = docs.iter().map(|d| d.as_str()).collect();
-            model.rerank(&tokenizer, &query_owned, &refs)
+            model.lock().unwrap().rerank(&tokenizer, &query_owned, &refs)
         })
         .await
         .map_err(|e| anyhow::anyhow!(e))??;
@@ -79,7 +79,7 @@ where
         Ok(scores)
     }
 
-    pub fn device(&self) -> &candle_core::Device {
-        self.model.device()
+    pub fn device(&self) -> candle_core::Device {
+        self.model.lock().unwrap().device().clone()
     }
 }
