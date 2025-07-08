@@ -7,6 +7,12 @@ use super::model::TextGenerationModel;
 use super::pipeline::TextGenerationPipeline;
 use super::xml_pipeline::XmlGenerationPipeline;
 
+/// Builder for text generation pipelines.
+/// 
+/// Note: This builder doesn't use the shared `BasePipelineBuilder` trait because
+/// it has a more complex building pattern with many configuration options
+/// (temperature, top_p, etc.), async model creation, and different caching logic.
+/// The shared trait is designed for simpler builders with just options and device.
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
     temperature: Option<f64>,
