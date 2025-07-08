@@ -230,8 +230,8 @@ impl Qwen3RerankModel {
 }
 
 
-use crate::pipelines::reranker_pipeline::reranker_model::RerankModel;
-use crate::pipelines::reranker_pipeline::reranker_pipeline::RerankResult;
+use crate::pipelines::reranker_pipeline::model::RerankModel;
+use crate::pipelines::reranker_pipeline::pipeline::RerankResult;
 
 impl RerankModel for Qwen3RerankModel {
     type Options = Qwen3RerankSize;

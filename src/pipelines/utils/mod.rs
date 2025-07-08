@@ -1,4 +1,5 @@
 use candle_core::{CudaDevice, Device};
+use crate::core::ModelOptions;
 
 /// Loads a device to be used for the model.
 /// If `index` is `Some(i)` it will attempt to load the specified CUDA device.
@@ -49,3 +50,9 @@ impl DeviceRequest {
         }
     }
 }
+
+/// Utility to generate a cache key combining model options and device location.
+pub fn build_cache_key<O: ModelOptions>(options: &O, device: &Device) -> String {
+    format!("{}-{:?}", options.cache_key(), device.location())
+}
+

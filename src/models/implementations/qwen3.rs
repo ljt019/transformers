@@ -867,7 +867,7 @@ Pipeline Stuff
 
 */
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::{
+use crate::pipelines::text_generation_pipeline::model::{
     LanguageModelContext, TextGenerationModel, ToggleableReasoning, ToolCalling,
 };
 
@@ -999,7 +999,7 @@ impl ToggleableReasoning for Qwen3Model {
 }
 
 use crate::core::ToolError;
-use crate::pipelines::text_generation_pipeline::text_generation_model::Tool;
+use crate::pipelines::text_generation_pipeline::model::Tool;
 use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {

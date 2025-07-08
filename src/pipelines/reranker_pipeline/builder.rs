@@ -1,8 +1,8 @@
-use super::reranker_model::RerankModel;
-use super::reranker_pipeline::RerankPipeline;
+use super::model::RerankModel;
+use super::pipeline::RerankPipeline;
 use std::sync::Arc;
 use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::DeviceRequest;
+use crate::pipelines::utils::{build_cache_key, DeviceRequest};
 
 pub struct RerankPipelineBuilder<M: RerankModel> {
     options: M::Options,
@@ -38,7 +38,7 @@ impl<M: RerankModel> RerankPipelineBuilder<M> {
         M::Options: ModelOptions + Clone,
     {
         let device = self.device_request.resolve()?;
-        let key = format!("{}-{:?}", self.options.cache_key(), device.location());
+        let key = build_cache_key(&self.options, &device);
         let model = global_cache()
             .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
             .await?;

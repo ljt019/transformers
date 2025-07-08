@@ -30,12 +30,12 @@
 //! ```
 
 pub mod builder;
-pub mod sentiment_analysis_model;
-pub mod sentiment_analysis_pipeline;
+pub mod model;
+pub mod pipeline;
 
 pub use builder::SentimentAnalysisPipelineBuilder;
-pub use sentiment_analysis_model::SentimentAnalysisModel;
-pub use sentiment_analysis_pipeline::SentimentAnalysisPipeline;
+pub use model::SentimentAnalysisModel;
+pub use pipeline::SentimentAnalysisPipeline;
 
 pub use crate::models::ModernBertSize;
 

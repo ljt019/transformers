@@ -1,5 +1,4 @@
-use super::text_generation_model::LanguageModelContext;
-use super::text_generation_model::TextGenerationModel;
+use super::model::{LanguageModelContext, TextGenerationModel};
 use crate::models::generation::{
     apply_repeat_penalty, initialize_logits_processor, GenerationParams,
 };

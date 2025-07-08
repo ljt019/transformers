@@ -1,6 +1,6 @@
 use tokenizers::Tokenizer;
 use candle_core::Device;
-use super::reranker_pipeline::RerankResult;
+use super::pipeline::RerankResult;
 
 /// Trait for reranking models.
 pub trait RerankModel {

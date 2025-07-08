@@ -123,7 +123,7 @@ fn l2_normalise(t: Tensor) -> Result<Tensor> {
     t.broadcast_div(&norm)
 }
 
-use crate::pipelines::embedding_pipeline::embedding_model::EmbeddingModel;
+use crate::pipelines::embedding_pipeline::model::EmbeddingModel;
 
 impl EmbeddingModel for Qwen3EmbeddingModel {
     type Options = Qwen3EmbeddingSize;

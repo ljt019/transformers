@@ -758,7 +758,7 @@ impl FillMaskModernBertModel {
     }
 }
 
-impl crate::pipelines::fill_mask_pipeline::fill_mask_model::FillMaskModel
+impl crate::pipelines::fill_mask_pipeline::model::FillMaskModel
     for FillMaskModernBertModel
 {
     type Options = ModernBertSize;
@@ -1016,7 +1016,7 @@ impl ZeroShotModernBertModel {
     }
 }
 
-impl crate::pipelines::zero_shot_classification_pipeline::zero_shot_classification_model::ZeroShotClassificationModel
+impl crate::pipelines::zero_shot_classification_pipeline::model::ZeroShotClassificationModel
     for ZeroShotModernBertModel
 {
     type Options = ModernBertSize;
@@ -1205,7 +1205,7 @@ impl SentimentModernBertModel {
     }
 }
 
-impl crate::pipelines::sentiment_analysis_pipeline::sentiment_analysis_model::SentimentAnalysisModel
+impl crate::pipelines::sentiment_analysis_pipeline::model::SentimentAnalysisModel
     for SentimentModernBertModel
 {
     type Options = ModernBertSize;
