@@ -1,12 +1,12 @@
 use crate::core::{global_cache, ModelOptions};
 use crate::models::{Gemma3Model, Gemma3Size, Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::{load_device_with, DeviceRequest};
+use crate::pipelines::utils::{DeviceRequest};
 
 use super::parser::XmlParserBuilder;
 use super::model::TextGenerationModel;
 use super::pipeline::TextGenerationPipeline;
 use super::xml_pipeline::XmlGenerationPipeline;
-use candle_core::{CudaDevice, Device};
+use candle_core::Device;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -122,12 +122,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             self.top_k.unwrap_or(default_params.top_k),
             self.min_p.unwrap_or(default_params.min_p),
         );
-        let device = match self.device_request {
-            DeviceRequest::Default => load_device_with(None)?,
-            DeviceRequest::Cpu => Device::Cpu,
-            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
-            DeviceRequest::Explicit(d) => d,
-        };
+        let device = self.device_request.resolve()?;
 
         TextGenerationPipeline::new(model, gen_params, device).await
     }
@@ -165,12 +160,7 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
             builder.register_tag(*tag);
         }
         let xml_parser = builder.build();
-        let device = match self.device_request {
-            DeviceRequest::Default => load_device_with(None)?,
-            DeviceRequest::Cpu => Device::Cpu,
-            DeviceRequest::Cuda(i) => Device::Cuda(CudaDevice::new_with_stream(i)?),
-            DeviceRequest::Explicit(d) => d,
-        };
+        let device = self.device_request.resolve()?;
 
         XmlGenerationPipeline::new(model, gen_params, xml_parser, device).await
     }

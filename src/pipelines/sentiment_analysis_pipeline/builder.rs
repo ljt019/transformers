@@ -1,35 +1,33 @@
 use super::model::SentimentAnalysisModel;
 use super::pipeline::SentimentAnalysisPipeline;
 use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::build_cache_key;
+use crate::pipelines::utils::{build_cache_key, DeviceRequest};
 
 pub struct SentimentAnalysisPipelineBuilder<M: SentimentAnalysisModel> {
     options: M::Options,
-    device: Option<candle_core::Device>,
+    device_request: DeviceRequest,
 }
 
 impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
     pub fn new(options: M::Options) -> Self {
         Self {
             options,
-            device: None,
+            device_request: DeviceRequest::Default,
         }
     }
 
     pub fn cpu(mut self) -> Self {
-        self.device = Some(candle_core::Device::Cpu);
+        self.device_request = DeviceRequest::Cpu;
         self
     }
 
     pub fn cuda_device(mut self, index: usize) -> Self {
-        let dev =
-            candle_core::Device::new_cuda_with_stream(index).unwrap_or(candle_core::Device::Cpu);
-        self.device = Some(dev);
+        self.device_request = DeviceRequest::Cuda(index);
         self
     }
 
     pub fn device(mut self, device: candle_core::Device) -> Self {
-        self.device = Some(device);
+        self.device_request = DeviceRequest::Explicit(device);
         self
     }
 
@@ -38,10 +36,7 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipelineBuilder<M> {
         M: Clone + Send + Sync + 'static,
         M::Options: ModelOptions + Clone,
     {
-        let device = match self.device {
-            Some(d) => d,
-            None => crate::pipelines::utils::load_device()?,
-        };
+        let device = self.device_request.resolve()?;
         let key = build_cache_key(&self.options, &device);
         let model = global_cache()
             .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
