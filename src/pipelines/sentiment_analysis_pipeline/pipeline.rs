@@ -35,11 +35,6 @@ impl<M: SentimentAnalysisModel> SentimentAnalysisPipeline<M> {
         })
     }
 
-    /// Legacy method for backward compatibility
-    pub fn predict_legacy(&self, text: &str) -> anyhow::Result<String> {
-        self.model.predict(&self.tokenizer, text)
-    }
-
     pub fn device(&self) -> &candle_core::Device {
         self.model.device()
     }

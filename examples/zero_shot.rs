@@ -16,11 +16,11 @@ async fn main() -> Result<()> {
     let candidate_labels = vec!["coding", "reading", "writing", "speaking", "cars"];
 
     // Single-label classification: probabilities sum to 1 (mutually exclusive)
-    println!("\n=== Single-label Classification (predict) ===");
+    println!("\n=== Single-label Classification (classify) ===");
     println!("Use this when you want to classify text into one of several mutually exclusive categories.");
     println!("Probabilities will sum to 1.0, representing confidence that the text belongs to each category.\n");
 
-    let single_label_result = pipeline.predict(text, &candidate_labels)?;
+    let single_label_result = pipeline.classify(text, &candidate_labels)?;
     println!("Text: \"{}\"", text);
     println!("Single-label results:");
     for result in &single_label_result {
@@ -32,11 +32,11 @@ async fn main() -> Result<()> {
     println!("  Total probability: {:.4}\n", sum);
 
     // Multi-label classification: raw entailment probabilities (independent labels)
-    println!("=== Multi-label Classification (predict_multi_label) ===");
+    println!("=== Multi-label Classification (classify_multi_label) ===");
     println!("Use this when labels can be independent and multiple labels could apply.");
     println!("Returns raw entailment probabilities for each label independently.\n");
 
-    let multi_label_result = pipeline.predict_multi_label(text, &candidate_labels)?;
+    let multi_label_result = pipeline.classify_multi_label(text, &candidate_labels)?;
     println!("Text: \"{}\"", text);
     println!("Multi-label results:");
     for result in &multi_label_result {

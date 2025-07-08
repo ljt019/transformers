@@ -12,7 +12,7 @@ async fn basic_zero_shot_classification() -> anyhow::Result<()> {
             .build()
             .await?;
     let labels = ["politics", "sports"];
-    let res = pipeline.predict("The election results were surprising", &labels)?;
+    let res = pipeline.classify("The election results were surprising", &labels)?;
     assert_eq!(res.len(), 2);
     Ok(())
 }

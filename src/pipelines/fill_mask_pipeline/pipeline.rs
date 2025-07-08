@@ -14,14 +14,14 @@ pub struct FillMaskPipeline<M: FillMaskModel> {
 
 impl<M: FillMaskModel> FillMaskPipeline<M> {
     /// Return the top prediction for the masked token
-    pub fn fill_mask(&self, text: &str) -> anyhow::Result<FillMaskPrediction> {
-        let predictions = self.fill_mask_top_k(text, 1)?;
+    pub fn predict(&self, text: &str) -> anyhow::Result<FillMaskPrediction> {
+        let predictions = self.predict_top_k(text, 1)?;
         predictions.into_iter().next()
             .ok_or_else(|| anyhow::anyhow!("No predictions returned"))
     }
 
     /// Return top-k predictions with scores for ranking/choice
-    pub fn fill_mask_top_k(&self, text: &str, _k: usize) -> anyhow::Result<Vec<FillMaskPrediction>> {
+    pub fn predict_top_k(&self, text: &str, _k: usize) -> anyhow::Result<Vec<FillMaskPrediction>> {
         // For now, return mock data - this needs to be implemented based on the actual model
         // The model.predict method needs to be updated to return structured data
         let result = self.model.predict(&self.tokenizer, text)?;
@@ -32,11 +32,6 @@ impl<M: FillMaskModel> FillMaskPipeline<M> {
             word: result.trim().to_string(),
             score: 0.95, // Mock score
         }])
-    }
-
-    /// Legacy method for backward compatibility
-    pub fn fill_mask_legacy(&self, text: &str) -> anyhow::Result<String> {
-        self.model.predict(&self.tokenizer, text)
     }
 
     pub fn device(&self) -> &candle_core::Device {

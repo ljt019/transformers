@@ -10,7 +10,7 @@ async fn basic_fill_mask() -> anyhow::Result<()> {
     let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base)
         .build()
         .await?;
-    let res = pipeline.fill_mask("The capital of France is [MASK].")?;
+    let res = pipeline.predict("The capital of France is [MASK].")?;
     assert!(res.word.contains("Paris") || !res.word.trim().is_empty());
     assert!(res.score >= 0.0 && res.score <= 1.0);
     Ok(())
@@ -21,7 +21,7 @@ async fn test_empty_input_handling() -> anyhow::Result<()> {
     let pipeline = FillMaskPipelineBuilder::modernbert(ModernBertSize::Base)
         .build()
         .await?;
-    assert!(pipeline.fill_mask("").is_err());
+    assert!(pipeline.predict("").is_err());
     Ok(())
 }
 
