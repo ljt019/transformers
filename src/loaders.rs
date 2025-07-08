@@ -52,7 +52,9 @@ impl HfLoader {
     }
 
     pub async fn load(&self) -> anyhow::Result<PathBuf> {
-        let hf_api = HfApi::new()?;
+        let hf_api = hf_hub::api::tokio::ApiBuilder::new()
+            .with_chunk_size(None)
+            .build()?;
         let hf_repo = self.repo.clone();
         let hf_api = hf_api.model(hf_repo);
 
