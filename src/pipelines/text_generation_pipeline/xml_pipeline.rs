@@ -538,7 +538,11 @@ impl<M: TextGenerationModel + ToolCalling + Send> XmlGenerationPipeline<M> {
         let mut tool_calls = Vec::new();
 
         for cap in tool_regex.captures_iter(text) {
-            let json_str = cap.get(1).unwrap().as_str().trim();
+            let json_str = cap
+                .get(1)
+                .expect("expected capture group")
+                .as_str()
+                .trim();
             match serde_json::from_str::<RawToolCall>(json_str) {
                 Ok(raw_call) => {
                     tool_calls.push(ToolCallInvocation {

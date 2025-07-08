@@ -1,12 +1,11 @@
 use crate::core::{global_cache, ModelOptions};
 use crate::models::{Gemma3Model, Gemma3Size, Qwen3Model, Qwen3Size};
-use crate::pipelines::utils::{DeviceRequest};
+use crate::pipelines::utils::{DeviceRequest, DeviceSelectable};
 
 use super::parser::XmlParserBuilder;
 use super::model::TextGenerationModel;
 use super::pipeline::TextGenerationPipeline;
 use super::xml_pipeline::XmlGenerationPipeline;
-use candle_core::Device;
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {
     model_options: M::Options,
@@ -74,24 +73,6 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
 
     pub fn min_p(mut self, min_p: f64) -> Self {
         self.min_p = Some(min_p.clamp(0.0, 1.0));
-        self
-    }
-
-    /// Force the pipeline to use CPU even if CUDA is available.
-    pub fn cpu(mut self) -> Self {
-        self.device_request = DeviceRequest::Cpu;
-        self
-    }
-
-    /// Select a specific CUDA device by index.
-    pub fn cuda_device(mut self, index: usize) -> Self {
-        self.device_request = DeviceRequest::Cuda(index);
-        self
-    }
-
-    /// Provide a preconstructed device.
-    pub fn device(mut self, device: Device) -> Self {
-        self.device_request = DeviceRequest::Explicit(device);
         self
     }
 
@@ -163,6 +144,12 @@ impl<M: TextGenerationModel> TextGenerationPipelineBuilder<M> {
         let device = self.device_request.resolve()?;
 
         XmlGenerationPipeline::new(model, gen_params, xml_parser, device).await
+    }
+}
+
+impl<M: TextGenerationModel> DeviceSelectable for TextGenerationPipelineBuilder<M> {
+    fn device_request_mut(&mut self) -> &mut DeviceRequest {
+        &mut self.device_request
     }
 }
 

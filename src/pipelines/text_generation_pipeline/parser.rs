@@ -237,7 +237,10 @@ impl XmlParser {
 
     /// Reset the parser state (useful for new generations)
     pub fn reset(&self) {
-        *self.state.lock().unwrap() = ParserState::default();
+        *self
+            .state
+            .lock()
+            .expect("parser lock poisoned") = ParserState::default();
     }
 
     /// Parse a complete text and return all events
@@ -267,7 +270,10 @@ impl XmlParser {
         // innermost open tag (if any). This enables true streaming behaviour: callers get
         // incremental updates instead of the whole block at close time.
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .expect("parser lock poisoned");
 
             if state.open_tags.is_empty() {
                 // Outside of any registered tag.
@@ -338,7 +344,10 @@ impl XmlParser {
     /// Process a single character and return an event if one is ready
     fn process_char(&self, c: char) -> Vec<Event> {
         let mut events = Vec::new();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("parser lock poisoned");
 
         match c {
             '<' => {
@@ -485,7 +494,10 @@ impl XmlParser {
 
     /// Flush any remaining content and return events
     pub fn flush(&self) -> Vec<Event> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("parser lock poisoned");
         let mut events = Vec::new();
 
         // Emit any remaining content

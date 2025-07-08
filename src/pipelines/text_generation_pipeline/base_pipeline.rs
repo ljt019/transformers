@@ -92,7 +92,8 @@ impl<M: TextGenerationModel> BasePipeline<M> {
         }
 
         // Safety: there is always at least one chunk, so last_logits is Some
-        let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
+        let mut next_token =
+            logits_processor.sample(&last_logits.expect("missing logits"))?;
         generated_tokens.push(next_token);
 
         // Generate autoregressively
@@ -133,7 +134,7 @@ impl<M: TextGenerationModel> BasePipeline<M> {
         let generated_tokens_str = self
             .model_tokenizer
             .decode(&filtered_tokens, /*skip_special_tokens=*/ true)
-            .unwrap();
+            .expect("token decode failed");
 
         Ok(generated_tokens_str)
     }
@@ -180,7 +181,8 @@ impl<M: TextGenerationModel> BasePipeline<M> {
 
             let mut dec_full = tokenizer.decode_stream(false);
 
-            let mut next_token = logits_processor.sample(&last_logits.unwrap())?;
+            let mut next_token =
+                logits_processor.sample(&last_logits.expect("missing logits"))?;
             generated.push(next_token);
 
             if !eos_tokens.contains(&next_token) {

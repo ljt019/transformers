@@ -79,8 +79,10 @@ impl HfLoader {
             }
         }
 
-        // If we exhausted all retries, return the last error
-        Err(last_error.unwrap().into())
+        // If we exhausted all retries, return the last encountered error or a generic one
+        Err(last_error
+            .map(anyhow::Error::from)
+            .unwrap_or_else(|| anyhow::anyhow!("unknown failure")))
     }
 }
 
