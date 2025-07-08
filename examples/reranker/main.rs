@@ -2,6 +2,7 @@ use anyhow::Result;
 use transformers::models::implementations::{Qwen3EmbeddingSize, Qwen3RerankSize};
 use transformers::pipelines::embedding_pipeline::*;
 use transformers::pipelines::reranker_pipeline::*;
+use transformers::pipelines::utils::DeviceSelectable;
 
 use std::fs;
 use std::path::Path;

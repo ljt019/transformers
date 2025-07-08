@@ -2,6 +2,7 @@
 // This is a separate crate that tests the public API
 
 use transformers::pipelines::zero_shot_classification_pipeline::*;
+use transformers::pipelines::utils::DeviceSelectable;
 use candle_core::DeviceLocation;
 
 #[tokio::test]

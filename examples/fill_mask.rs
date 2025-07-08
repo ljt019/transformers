@@ -17,9 +17,13 @@ async fn main() -> Result<()> {
     
     println!("\n=== Fill Mask Results ===");
     println!("Text: \"{}\"", text);
-    println!("Predictions:");
-    for prediction in result {
-        println!("  - {}: {:.4}", prediction.token, prediction.score);
+    println!("Prediction: \"{}\" (confidence: {:.4})", result.word, result.score);
+    
+    // Show top-k predictions
+    let top_predictions = pipeline.fill_mask_top_k(text, 3)?;
+    println!("\nTop 3 predictions:");
+    for (i, prediction) in top_predictions.iter().enumerate() {
+        println!("  {}. \"{}\" (confidence: {:.4})", i + 1, prediction.word, prediction.score);
     }
 
     Ok(())

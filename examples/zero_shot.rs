@@ -23,12 +23,12 @@ async fn main() -> Result<()> {
     let single_label_result = pipeline.predict(text, &candidate_labels)?;
     println!("Text: \"{}\"", text);
     println!("Single-label results:");
-    for (label, score) in &single_label_result {
-        println!("  - {}: {:.4}", label, score);
+    for result in &single_label_result {
+        println!("  - {}: {:.4}", result.label, result.score);
     }
 
     // Verify probabilities sum to 1
-    let sum: f32 = single_label_result.iter().map(|(_, score)| score).sum();
+    let sum: f32 = single_label_result.iter().map(|r| r.score).sum();
     println!("  Total probability: {:.4}\n", sum);
 
     // Multi-label classification: raw entailment probabilities (independent labels)
@@ -39,8 +39,8 @@ async fn main() -> Result<()> {
     let multi_label_result = pipeline.predict_multi_label(text, &candidate_labels)?;
     println!("Text: \"{}\"", text);
     println!("Multi-label results:");
-    for (label, score) in &multi_label_result {
-        println!("  - {}: {:.4}", label, score);
+    for result in &multi_label_result {
+        println!("  - {}: {:.4}", result.label, result.score);
     }
 
     Ok(())

@@ -2,6 +2,7 @@
 // This is a separate crate that tests the public API
 
 use transformers::pipelines::fill_mask_pipeline::*;
+use transformers::pipelines::utils::DeviceSelectable;
 use candle_core::DeviceLocation;
 
 #[tokio::test]
@@ -10,7 +11,8 @@ async fn basic_fill_mask() -> anyhow::Result<()> {
         .build()
         .await?;
     let res = pipeline.fill_mask("The capital of France is [MASK].")?;
-    assert!(res.contains("Paris") || !res.trim().is_empty());
+    assert!(res.word.contains("Paris") || !res.word.trim().is_empty());
+    assert!(res.score >= 0.0 && res.score <= 1.0);
     Ok(())
 }
 

@@ -33,7 +33,6 @@
 
 use crate::core::GenerationConfig;
 use serde::Deserialize;
-use hf_hub::api::tokio::Api as HfApi;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 

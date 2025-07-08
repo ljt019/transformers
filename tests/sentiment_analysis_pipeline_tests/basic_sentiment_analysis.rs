@@ -2,6 +2,7 @@
 // This is a separate crate that tests the public API
 
 use transformers::pipelines::sentiment_analysis_pipeline::*;
+use transformers::pipelines::utils::DeviceSelectable;
 use candle_core::DeviceLocation;
 
 #[tokio::test]
@@ -10,7 +11,8 @@ async fn basic_sentiment() -> anyhow::Result<()> {
         .build()
         .await?;
     let res = pipeline.predict("I love Rust!")?;
-    assert!(!res.trim().is_empty());
+    assert!(!res.label.trim().is_empty());
+    assert!(res.score >= 0.0 && res.score <= 1.0);
     Ok(())
 }
 
