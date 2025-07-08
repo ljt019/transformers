@@ -1,10 +1,15 @@
+use anyhow::Result;
 use transformers::pipelines::embedding_pipeline::*;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
+    println!("Building pipeline...");
+
     let pipeline = EmbeddingPipelineBuilder::qwen3(Qwen3EmbeddingSize::Size0_6B)
         .build()
         .await?;
+
+    println!("Pipeline built successfully.");
 
     let emb_hello_world = pipeline.embed("hello world").await?;
 
@@ -25,7 +30,9 @@ async fn main() -> anyhow::Result<()> {
     let top = EmbeddingPipeline::<Qwen3EmbeddingModel>::top_k(&emb_hello_world, &scores, 1);
     let closest_to_hello_world = top.first().map(|(i, _)| embeddings[*i].0);
 
-    println!("Closest to hello world: {:?}", closest_to_hello_world);
+    println!("\n=== Embedding Similarity Results ===");
+    println!("Query: \"hello world\"");
+    println!("Closest match: {:?}", closest_to_hello_world);
 
     Ok(())
 }

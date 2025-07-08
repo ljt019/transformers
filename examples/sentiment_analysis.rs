@@ -14,7 +14,10 @@ async fn main() -> Result<()> {
     let text = "I love my new car";
 
     let result = pipeline.predict(text)?;
-    println!("Result: {:?}", result);
+    
+    println!("\n=== Sentiment Analysis Result ===");
+    println!("Text: \"{}\"", text);
+    println!("Sentiment: {} (confidence: {:.4})", result.label, result.score);
 
     Ok(())
 }

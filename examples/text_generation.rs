@@ -3,6 +3,8 @@ use transformers::pipelines::text_generation_pipeline::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    println!("Building pipeline...");
+
     // Start by creating the pipeline, using the builder to configure any generation parameters.
     // Parameters are optional, defaults are set to good values for each model.
     let pipeline = TextGenerationPipelineBuilder::qwen3(Qwen3Size::Size0_6B)
@@ -12,12 +14,14 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
+    println!("Pipeline built successfully.");
+
     // Get a completion from a prompt.
     let completion = pipeline
         .completion("Explain the concept of Large Language Models in simple terms.")
         .await?;
 
-    println!("\n--- Generated Text ---");
+    println!("\n=== Generated Text ===");
     println!("{}", completion);
 
     // Create and use messages for your completions to keep a conversation going.
@@ -28,7 +32,7 @@ async fn main() -> Result<()> {
 
     let completion = pipeline.completion(&messages).await?;
 
-    println!("\n--- Generated Text 2 ---");
+    println!("\n=== Generated Text 2 ===");
     println!("{}", completion);
 
     // To continue the conversation, add the response to the messages
@@ -38,7 +42,7 @@ async fn main() -> Result<()> {
     // Now ask a follow-up question.
     let completion = pipeline.completion(&messages).await?;
 
-    println!("\n--- Generated Text 3 (Follow-up) ---");
+    println!("\n=== Generated Text 3 (Follow-up) ===");
     println!("{}", completion);
 
     Ok(())

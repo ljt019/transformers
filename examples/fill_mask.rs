@@ -14,7 +14,13 @@ async fn main() -> Result<()> {
     let text = "I love my [MASK] car.";
 
     let result = pipeline.fill_mask(text)?;
-    println!("Result: {:?}", result);
+    
+    println!("\n=== Fill Mask Results ===");
+    println!("Text: \"{}\"", text);
+    println!("Predictions:");
+    for prediction in result {
+        println!("  - {}: {:.4}", prediction.token, prediction.score);
+    }
 
     Ok(())
 }
