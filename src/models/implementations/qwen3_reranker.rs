@@ -49,10 +49,6 @@ impl crate::core::ModelOptions for Qwen3RerankSize {
     }
 }
 
-fn rerank_id(size: Qwen3RerankSize) -> anyhow::Result<(String, String)> {
-    Ok(size.to_id())
-}
-
 /// Qwen3 model for reranking text pairs using cross-encoder architecture.
 #[derive(Clone)]
 pub struct Qwen3RerankModel {
@@ -62,7 +58,7 @@ pub struct Qwen3RerankModel {
 
 impl Qwen3RerankModel {
     pub async fn from_hf(device: &Device, size: Qwen3RerankSize) -> anyhow::Result<Self> {
-        let (repo_id, file_name) = rerank_id(size)?;
+        let (repo_id, file_name) = size.to_id();
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
         let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);

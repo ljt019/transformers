@@ -61,7 +61,17 @@ where
 
     /// Get relevance scores for all documents without sorting.
     pub async fn get_scores(&self, query: &str, documents: &[&str]) -> anyhow::Result<Vec<f32>> {
-        let ranked = self.model.rerank(&self.tokenizer, query, documents)?;
+        let model = Arc::clone(&self.model);
+        let tokenizer = self.tokenizer.clone();
+        let query_owned = query.to_owned();
+        let docs: Vec<String> = documents.iter().map(|d| d.to_string()).collect();
+        let ranked = tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = docs.iter().map(|d| d.as_str()).collect();
+            model.rerank(&tokenizer, &query_owned, &refs)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+
         let mut scores = vec![0.0f32; documents.len()];
         for r in ranked {
             scores[r.index] = r.score;
