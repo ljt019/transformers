@@ -8,7 +8,6 @@
 //!
 //! The `BasePipelineBuilder` trait captures this common pattern.
 
-use std::sync::Arc;
 use anyhow::Result;
 use crate::core::{global_cache, ModelOptions};
 use super::{build_cache_key, DeviceRequest, DeviceSelectable};

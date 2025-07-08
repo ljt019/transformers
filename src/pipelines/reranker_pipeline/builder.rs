@@ -1,26 +1,20 @@
 use super::model::RerankModel;
 use super::pipeline::RerankPipeline;
+use crate::core::ModelOptions;
+use crate::pipelines::utils::{BasePipelineBuilder, DeviceRequest, DeviceSelectable, StandardPipelineBuilder};
 use std::sync::Arc;
-use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::{build_cache_key, DeviceRequest, DeviceSelectable, BasePipelineBuilder};
 
-pub struct RerankPipelineBuilder<M: RerankModel> {
-    options: M::Options,
-    device_request: DeviceRequest,
-}
+pub struct RerankPipelineBuilder<M: RerankModel>(StandardPipelineBuilder<M::Options>);
 
 impl<M: RerankModel> RerankPipelineBuilder<M> {
     pub fn new(options: M::Options) -> Self {
-        Self {
-            options,
-            device_request: DeviceRequest::Default,
-        }
+        Self(StandardPipelineBuilder::new(options))
     }
 }
 
 impl<M: RerankModel> DeviceSelectable for RerankPipelineBuilder<M> {
     fn device_request_mut(&mut self) -> &mut DeviceRequest {
-        &mut self.device_request
+        self.0.device_request_mut()
     }
 }
 
@@ -34,11 +28,11 @@ where
     type Options = M::Options;
 
     fn options(&self) -> &Self::Options {
-        &self.options
+        &self.0.options
     }
     
     fn device_request(&self) -> &DeviceRequest {
-        &self.device_request
+        &self.0.device_request
     }
 
     fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
@@ -50,9 +44,9 @@ where
     }
     
     fn construct_pipeline(model: M, tokenizer: tokenizers::Tokenizer) -> anyhow::Result<Self::Pipeline> {
-        Ok(RerankPipeline { 
-            model: Arc::new(model), 
-            tokenizer 
+        Ok(RerankPipeline {
+            model: Arc::new(model),
+            tokenizer,
         })
     }
 }

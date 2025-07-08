@@ -1,25 +1,19 @@
 use super::model::ZeroShotClassificationModel;
 use super::pipeline::ZeroShotClassificationPipeline;
-use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::{build_cache_key, DeviceRequest, DeviceSelectable, BasePipelineBuilder};
+use crate::core::ModelOptions;
+use crate::pipelines::utils::{BasePipelineBuilder, DeviceRequest, DeviceSelectable, StandardPipelineBuilder};
 
-pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel> {
-    options: M::Options,
-    device_request: DeviceRequest,
-}
+pub struct ZeroShotClassificationPipelineBuilder<M: ZeroShotClassificationModel>(StandardPipelineBuilder<M::Options>);
 
 impl<M: ZeroShotClassificationModel> ZeroShotClassificationPipelineBuilder<M> {
     pub fn new(options: M::Options) -> Self {
-        Self {
-            options,
-            device_request: DeviceRequest::Default,
-        }
+        Self(StandardPipelineBuilder::new(options))
     }
 }
 
 impl<M: ZeroShotClassificationModel> DeviceSelectable for ZeroShotClassificationPipelineBuilder<M> {
     fn device_request_mut(&mut self) -> &mut DeviceRequest {
-        &mut self.device_request
+        self.0.device_request_mut()
     }
 }
 
@@ -33,11 +27,11 @@ where
     type Options = M::Options;
 
     fn options(&self) -> &Self::Options {
-        &self.options
+        &self.0.options
     }
     
     fn device_request(&self) -> &DeviceRequest {
-        &self.device_request
+        &self.0.device_request
     }
 
     fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
