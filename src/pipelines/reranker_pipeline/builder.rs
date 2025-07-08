@@ -2,7 +2,7 @@ use super::model::RerankModel;
 use super::pipeline::RerankPipeline;
 use std::sync::Arc;
 use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::{build_cache_key, DeviceRequest};
+use crate::pipelines::utils::{build_cache_key, DeviceRequest, DeviceSelectable};
 
 pub struct RerankPipelineBuilder<M: RerankModel> {
     options: M::Options,
@@ -17,21 +17,6 @@ impl<M: RerankModel> RerankPipelineBuilder<M> {
         }
     }
 
-    pub fn cpu(mut self) -> Self {
-        self.device_request = DeviceRequest::Cpu;
-        self
-    }
-
-    pub fn cuda_device(mut self, index: usize) -> Self {
-        self.device_request = DeviceRequest::Cuda(index);
-        self
-    }
-
-    pub fn device(mut self, device: candle_core::Device) -> Self {
-        self.device_request = DeviceRequest::Explicit(device);
-        self
-    }
-
     pub async fn build(self) -> anyhow::Result<RerankPipeline<M>>
     where
         M: Clone + Send + Sync + 'static,
@@ -44,6 +29,12 @@ impl<M: RerankModel> RerankPipelineBuilder<M> {
             .await?;
         let tokenizer = M::get_tokenizer(self.options)?;
         Ok(RerankPipeline { model: Arc::new(model), tokenizer })
+    }
+}
+
+impl<M: RerankModel> DeviceSelectable for RerankPipelineBuilder<M> {
+    fn device_request_mut(&mut self) -> &mut DeviceRequest {
+        &mut self.device_request
     }
 }
 

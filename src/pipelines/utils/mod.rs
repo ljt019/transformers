@@ -51,6 +51,30 @@ impl DeviceRequest {
     }
 }
 
+/// Trait providing convenience methods for pipeline builders to select a device.
+pub trait DeviceSelectable: Sized {
+    /// Returns a mutable reference to the builder's internal [`DeviceRequest`].
+    fn device_request_mut(&mut self) -> &mut DeviceRequest;
+
+    /// Force the pipeline to run on CPU.
+    fn cpu(mut self) -> Self {
+        *self.device_request_mut() = DeviceRequest::Cpu;
+        self
+    }
+
+    /// Select a specific CUDA device by index.
+    fn cuda_device(mut self, index: usize) -> Self {
+        *self.device_request_mut() = DeviceRequest::Cuda(index);
+        self
+    }
+
+    /// Provide an explicit [`Device`].
+    fn device(mut self, device: Device) -> Self {
+        *self.device_request_mut() = DeviceRequest::Explicit(device);
+        self
+    }
+}
+
 /// Utility to generate a cache key combining model options and device location.
 pub fn build_cache_key<O: ModelOptions>(options: &O, device: &Device) -> String {
     format!("{}-{:?}", options.cache_key(), device.location())
