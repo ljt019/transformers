@@ -32,6 +32,7 @@
 //! and Hugging Face Hub lock acquisition failures.
 
 use crate::core::GenerationConfig;
+use serde::Deserialize;
 use hf_hub::api::tokio::Api as HfApi;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
@@ -110,6 +111,19 @@ pub struct GenerationConfigLoader {
     pub generation_config_file_loader: HfLoader,
 }
 
+#[derive(Deserialize)]
+struct RawGenerationConfig {
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    top_k: Option<u64>,
+    min_p: Option<f64>,
+    #[serde(alias = "repetition_penalty", alias = "repeat_penalty")]
+    repeat_penalty: Option<f32>,
+    repeat_last_n: Option<usize>,
+    #[serde(alias = "eos_token_id", alias = "eos_token_ids")]
+    eos_token_ids: Option<serde_json::Value>,
+}
+
 impl GenerationConfigLoader {
     pub fn new(repo: &str, filename: &str) -> Self {
         let generation_config_file_loader = HfLoader::new(repo, filename);
@@ -128,49 +142,28 @@ impl GenerationConfigLoader {
         let generation_config_content =
             std::fs::read_to_string(generation_config_file_path)?;
 
-        let config_json: serde_json::Value = serde_json::from_str(&generation_config_content)?;
+        let raw: RawGenerationConfig = serde_json::from_str(&generation_config_content)?;
 
-        // All fields are optional to handle inconsistent JSON files
-        let temperature = config_json.get("temperature").and_then(|v| v.as_f64());
-        let top_p = config_json.get("top_p").and_then(|v| v.as_f64());
-        let top_k = config_json.get("top_k").and_then(|v| v.as_u64());
-        let min_p = config_json.get("min_p").and_then(|v| v.as_f64());
-        let repeat_penalty = config_json
-            .get("repetition_penalty")
-            .or_else(|| config_json.get("repeat_penalty"))
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32);
-        let repeat_last_n = config_json
-            .get("repeat_last_n")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-
-        // Handle both single EOS token ID and array of EOS token IDs
-        let eos_token_ids = match config_json.get("eos_token_id") {
-            Some(serde_json::Value::Number(n)) => vec![n.as_u64().expect("Invalid EOS token ID")],
+        let eos_token_ids = match raw.eos_token_ids {
+            Some(serde_json::Value::Number(n)) => vec![n
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("Invalid EOS token ID"))?],
             Some(serde_json::Value::Array(arr)) => arr
-                .iter()
-                .map(|v| v.as_u64().expect("Invalid EOS token ID in array"))
-                .collect(),
-            _ => {
-                // Try alternative field names
-                match config_json.get("eos_token_ids") {
-                    Some(serde_json::Value::Array(arr)) => arr
-                        .iter()
-                        .map(|v| v.as_u64().expect("Invalid EOS token ID in array"))
-                        .collect(),
-                    _ => vec![], // Empty vec instead of panic
-                }
-            }
+                .into_iter()
+                .map(|v| v
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid EOS token ID in array")))
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => Vec::new(),
         };
 
         Ok(GenerationConfig {
-            temperature,
-            top_p,
-            top_k,
-            min_p,
-            repeat_penalty,
-            repeat_last_n,
+            temperature: raw.temperature,
+            top_p: raw.top_p,
+            top_k: raw.top_k,
+            min_p: raw.min_p,
+            repeat_penalty: raw.repeat_penalty,
+            repeat_last_n: raw.repeat_last_n,
             eos_token_ids,
         })
     }

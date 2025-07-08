@@ -32,12 +32,12 @@
 //! ```
 
 pub mod builder;
-pub mod fill_mask_model;
-pub mod fill_mask_pipeline;
+pub mod model;
+pub mod pipeline;
 
 pub use builder::FillMaskPipelineBuilder;
-pub use fill_mask_model::FillMaskModel;
-pub use fill_mask_pipeline::FillMaskPipeline;
+pub use model::FillMaskModel;
+pub use pipeline::FillMaskPipeline;
 
 pub use crate::models::ModernBertSize;
 

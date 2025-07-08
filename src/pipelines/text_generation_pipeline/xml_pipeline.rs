@@ -1,10 +1,10 @@
 use super::base_pipeline::BasePipeline;
-use super::text_generation_model::TextGenerationModel;
-use super::text_generation_model::{
+use super::model::TextGenerationModel;
+use super::model::{
     LanguageModelContext, ToggleableReasoning,
 };
 use super::tools::{ErrorStrategy, Tool, ToolCalling};
-use super::text_generation_pipeline::Input;
+use super::pipeline::Input;
 use super::parser::{Event, XmlParser};
 use crate::models::generation::GenerationParams;
 use async_stream::stream;

@@ -1,13 +1,13 @@
-use super::fill_mask_model::FillMaskModel;
+use super::model::SentimentAnalysisModel;
 use tokenizers::Tokenizer;
 
-pub struct FillMaskPipeline<M: FillMaskModel> {
+pub struct SentimentAnalysisPipeline<M: SentimentAnalysisModel> {
     pub(crate) model: M,
     pub(crate) tokenizer: Tokenizer,
 }
 
-impl<M: FillMaskModel> FillMaskPipeline<M> {
-    pub fn fill_mask(&self, text: &str) -> anyhow::Result<String> {
+impl<M: SentimentAnalysisModel> SentimentAnalysisPipeline<M> {
+    pub fn predict(&self, text: &str) -> anyhow::Result<String> {
         self.model.predict(&self.tokenizer, text)
     }
 

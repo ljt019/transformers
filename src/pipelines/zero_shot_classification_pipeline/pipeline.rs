@@ -1,4 +1,4 @@
-use super::zero_shot_classification_model::ZeroShotClassificationModel;
+use super::model::ZeroShotClassificationModel;
 use tokenizers::Tokenizer;
 
 pub struct ZeroShotClassificationPipeline<M: ZeroShotClassificationModel> {

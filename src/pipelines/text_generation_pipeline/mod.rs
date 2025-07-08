@@ -44,16 +44,16 @@ pub mod base_pipeline;
 pub mod builder;
 pub mod parser;
 pub mod streaming;
-pub mod text_generation_model;
-pub mod text_generation_pipeline;
+pub mod model;
+pub mod pipeline;
 pub mod tools;
-pub mod xml_generation_pipeline;
+pub mod xml_pipeline;
 
 pub use crate::tools;
 pub use builder::TextGenerationPipelineBuilder;
 pub use streaming::{CompletionStream, EventStream};
-pub use text_generation_pipeline::{Input, TextGenerationPipeline};
-pub use xml_generation_pipeline::XmlGenerationPipeline;
+pub use pipeline::{Input, TextGenerationPipeline};
+pub use xml_pipeline::XmlGenerationPipeline;
 
 // Convenience re-exports so users can simply
 // `use transformers::pipelines::text_generation_pipeline::*;` and access

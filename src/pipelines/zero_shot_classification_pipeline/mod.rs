@@ -36,12 +36,12 @@
 //! ```
 
 pub mod builder;
-pub mod zero_shot_classification_model;
-pub mod zero_shot_classification_pipeline;
+pub mod model;
+pub mod pipeline;
 
 pub use builder::ZeroShotClassificationPipelineBuilder;
-pub use zero_shot_classification_model::ZeroShotClassificationModel;
-pub use zero_shot_classification_pipeline::ZeroShotClassificationPipeline;
+pub use model::ZeroShotClassificationModel;
+pub use pipeline::ZeroShotClassificationPipeline;
 
 pub use crate::models::ModernBertSize;
 

@@ -3,9 +3,9 @@ use crate::models::{Gemma3Model, Gemma3Size, Qwen3Model, Qwen3Size};
 use crate::pipelines::utils::{load_device_with, DeviceRequest};
 
 use super::parser::XmlParserBuilder;
-use super::text_generation_model::TextGenerationModel;
-use super::text_generation_pipeline::TextGenerationPipeline;
-use super::xml_generation_pipeline::XmlGenerationPipeline;
+use super::model::TextGenerationModel;
+use super::pipeline::TextGenerationPipeline;
+use super::xml_pipeline::XmlGenerationPipeline;
 use candle_core::{CudaDevice, Device};
 
 pub struct TextGenerationPipelineBuilder<M: TextGenerationModel> {

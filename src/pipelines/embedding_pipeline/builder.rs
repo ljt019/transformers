@@ -1,8 +1,8 @@
-use super::embedding_model::EmbeddingModel;
-use super::embedding_pipeline::EmbeddingPipeline;
+use super::model::EmbeddingModel;
+use super::pipeline::EmbeddingPipeline;
 use std::sync::Arc;
 use crate::core::{global_cache, ModelOptions};
-use crate::pipelines::utils::DeviceRequest;
+use crate::pipelines::utils::{build_cache_key, DeviceRequest};
 
 pub struct EmbeddingPipelineBuilder<M: EmbeddingModel> {
     options: M::Options,
@@ -38,7 +38,7 @@ impl<M: EmbeddingModel> EmbeddingPipelineBuilder<M> {
         M::Options: ModelOptions + Clone,
     {
         let device = self.device_request.resolve()?;
-        let key = format!("{}-{:?}", self.options.cache_key(), device.location());
+        let key = build_cache_key(&self.options, &device);
         let model = global_cache()
             .get_or_create(&key, || M::new(self.options.clone(), device.clone()))
             .await?;
@@ -52,3 +52,4 @@ impl EmbeddingPipelineBuilder<crate::models::implementations::qwen3_embeddings::
         Self::new(size)
     }
 }
+

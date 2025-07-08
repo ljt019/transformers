@@ -1,4 +1,4 @@
-use super::reranker_model::RerankModel;
+use super::model::RerankModel;
 use tokenizers::Tokenizer;
 use std::sync::Arc;
 

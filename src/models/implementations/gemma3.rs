@@ -915,7 +915,7 @@ Pipeline stuff
 
 */
 
-use crate::pipelines::text_generation_pipeline::text_generation_model::{
+use crate::pipelines::text_generation_pipeline::model::{
     LanguageModelContext, TextGenerationModel,
 };
 use async_trait::async_trait;

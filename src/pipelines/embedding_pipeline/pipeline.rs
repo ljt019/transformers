@@ -1,4 +1,4 @@
-use super::embedding_model::EmbeddingModel;
+use super::model::EmbeddingModel;
 use tokenizers::Tokenizer;
 use std::sync::Arc;
 
