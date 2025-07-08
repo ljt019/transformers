@@ -2,6 +2,7 @@ use anyhow::Result;
 use transformers::models::implementations::{Qwen3EmbeddingSize, Qwen3RerankSize};
 use transformers::pipelines::embedding_pipeline::*;
 use transformers::pipelines::reranker_pipeline::*;
+use transformers::pipelines::utils::BasePipelineBuilder;
 use transformers::pipelines::utils::DeviceSelectable;
 
 use std::fs;
@@ -17,7 +18,7 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let rerank_pipe = RerankPipelineBuilder::qwen3(Qwen3RerankSize::Size0_6B)
+    let rerank_pipe = RerankPipelineBuilder::qwen3(Qwen3RerankSize::Size4B)
         .cpu()
         .build()
         .await?;
@@ -95,7 +96,12 @@ async fn main() -> Result<()> {
     let mut scored: Vec<(usize, f32)> = doc_embeddings
         .iter()
         .enumerate()
-        .map(|(i, emb)| (i, EmbeddingPipeline::<Qwen3EmbeddingModel>::cosine_similarity(&query_emb, emb)))
+        .map(|(i, emb)| {
+            (
+                i,
+                EmbeddingPipeline::<Qwen3EmbeddingModel>::cosine_similarity(&query_emb, emb),
+            )
+        })
         .collect();
 
     // higher cosine = more similar
