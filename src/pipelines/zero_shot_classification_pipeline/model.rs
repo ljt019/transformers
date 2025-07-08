@@ -3,7 +3,7 @@ use tokenizers::Tokenizer;
 pub trait ZeroShotClassificationModel {
     type Options: std::fmt::Debug + Clone;
 
-    fn new(options: Self::Options, device: candle_core::Device) -> anyhow::Result<Self>
+    async fn new(options: Self::Options, device: candle_core::Device) -> anyhow::Result<Self>
     where
         Self: Sized;
 
@@ -23,7 +23,7 @@ pub trait ZeroShotClassificationModel {
         candidate_labels: &[&str],
     ) -> anyhow::Result<Vec<(String, f32)>>;
 
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
+    async fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
 
     fn device(&self) -> &candle_core::Device;
 }

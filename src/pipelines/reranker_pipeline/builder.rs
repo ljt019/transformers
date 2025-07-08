@@ -35,12 +35,12 @@ where
         &self.0.device_request
     }
 
-    fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
-        M::new(options, device)
+    async fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
+        M::new(options, device).await
     }
     
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<tokenizers::Tokenizer> {
-        M::get_tokenizer(options)
+    async fn get_tokenizer(options: Self::Options) -> anyhow::Result<tokenizers::Tokenizer> {
+        M::get_tokenizer(options).await
     }
     
     fn construct_pipeline(model: M, tokenizer: tokenizers::Tokenizer) -> anyhow::Result<Self::Pipeline> {

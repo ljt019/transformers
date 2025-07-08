@@ -477,17 +477,26 @@ impl ModelWeights {
 pub struct Qwen3RerankModel {
     weights: ModelWeights,
     device: Device,
+    yes_token_id: Option<u32>,
+    no_token_id: Option<u32>,
 }
 
 impl Qwen3RerankModel {
     pub async fn from_hf(device: &Device, size: Qwen3RerankSize) -> anyhow::Result<Self> {
+        println!("Loading Qwen3RerankModel from HF...");
+        let start = std::time::Instant::now();
         let (repo_id, file_name) = size.to_id();
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
+        println!("  GGUF file loaded in {:?}", start.elapsed());
+        let start = std::time::Instant::now();
         let weights = ModelWeights::from_gguf(content, &mut file, device)?;
+        println!("  Model weights created in {:?}", start.elapsed());
         Ok(Self {
             weights,
             device: device.clone(),
+            yes_token_id: None,
+            no_token_id: None,
         })
     }
 
@@ -528,6 +537,7 @@ impl Qwen3RerankModel {
         query: &str,
         document: &str,
     ) -> anyhow::Result<f32> {
+        let start = std::time::Instant::now();
         let instruction = "Given a query, retrieve relevant passages that answer the query";
 
         // Format with system prompt and proper delimiters
@@ -538,21 +548,42 @@ impl Qwen3RerankModel {
             "{prefix}<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {document}{suffix}"
         );
 
+        let encode_start = std::time::Instant::now();
         let tokens = tokenizer
             .encode(prompt_str, true)
             .map_err(anyhow::Error::msg)?;
 
         let token_ids = tokens.get_ids();
+        println!("    Tokenization: {:?}, {} tokens", encode_start.elapsed(), token_ids.len());
 
         // Run a single forward pass to get logits
+        let tensor_start = std::time::Instant::now();
         let input = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
+        println!("    Tensor creation: {:?}", tensor_start.elapsed());
 
+        let forward_start = std::time::Instant::now();
         let logits = self.weights.forward(&input, 0)?;
         let logits = logits.squeeze(0)?;
+        println!("    Model forward pass: {:?}", forward_start.elapsed());
 
-        // Get token IDs for "yes" and "no" for scoring
-        let yes_token_id = *tokenizer.get_vocab(true).get("yes").unwrap() as u32;
-        let no_token_id = *tokenizer.get_vocab(true).get("no").unwrap() as u32;
+        // Get token IDs for "yes" and "no" for scoring (cache them)
+        let yes_token_id = if let Some(id) = self.yes_token_id {
+            id
+        } else {
+            let vocab = tokenizer.get_vocab(true);
+            let id = *vocab.get("yes").unwrap() as u32;
+            self.yes_token_id = Some(id);
+            id
+        };
+        
+        let no_token_id = if let Some(id) = self.no_token_id {
+            id
+        } else {
+            let vocab = tokenizer.get_vocab(true);
+            let id = *vocab.get("no").unwrap() as u32;
+            self.no_token_id = Some(id);
+            id
+        };
 
         // Extract logits for "yes" and "no" tokens
         let yes_logit = logits.get(yes_token_id as usize)?.to_scalar::<f32>()?;
@@ -561,6 +592,8 @@ impl Qwen3RerankModel {
         // Compute score as difference (equivalent to binary classification)
         // Higher score means more relevant
         let score = yes_logit - no_logit;
+        
+        println!("  compute_relevance_score took {:?}", start.elapsed());
 
         Ok(score)
     }
@@ -590,18 +623,8 @@ impl Qwen3RerankModel {
 impl RerankModel for Qwen3RerankModel {
     type Options = Qwen3RerankSize;
 
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
-        // Check if we're in a tokio runtime
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // If we're in a runtime, spawn a blocking task
-            tokio::task::block_in_place(|| {
-                handle.block_on(Self::from_hf(&device, options))
-            })
-        } else {
-            // If not in a runtime, create a new one
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(Self::from_hf(&device, options))
-        }
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        Self::from_hf(&device, options).await
     }
 
     fn rerank(
@@ -613,20 +636,9 @@ impl RerankModel for Qwen3RerankModel {
         self.rerank_documents(tokenizer, query, documents)
     }
 
-    fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
+    async fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
-        
-        // Check if we're in a tokio runtime
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // If we're in a runtime, spawn a blocking task
-            tokio::task::block_in_place(|| {
-                handle.block_on(loader.load())
-            })
-        } else {
-            // If not in a runtime, create a new one
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(loader.load())
-        }
+        loader.load().await
     }
 
     fn batch_rerank(

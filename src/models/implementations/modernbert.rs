@@ -763,7 +763,7 @@ impl crate::pipelines::fill_mask_pipeline::model::FillMaskModel
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         FillMaskModernBertModel::new(options, device)
     }
 
@@ -771,7 +771,7 @@ impl crate::pipelines::fill_mask_pipeline::model::FillMaskModel
         self.predict(tokenizer, text)
     }
 
-    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+    async fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
         Self::get_tokenizer(options)
     }
 
@@ -1021,7 +1021,7 @@ impl crate::pipelines::zero_shot_classification_pipeline::model::ZeroShotClassif
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         ZeroShotModernBertModel::new(options, device)
     }
 
@@ -1043,7 +1043,7 @@ impl crate::pipelines::zero_shot_classification_pipeline::model::ZeroShotClassif
         self.predict_raw(tokenizer, text, candidate_labels)
     }
 
-    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+    async fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
         let repo_id = Self::get_tokenizer_repo_info(options);
         let api = Api::new()?;
         let repo = api.repo(Repo::new(repo_id, RepoType::Model));
@@ -1210,7 +1210,7 @@ impl crate::pipelines::sentiment_analysis_pipeline::model::SentimentAnalysisMode
 {
     type Options = ModernBertSize;
 
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
         SentimentModernBertModel::new(options, device)
     }
 
@@ -1218,7 +1218,7 @@ impl crate::pipelines::sentiment_analysis_pipeline::model::SentimentAnalysisMode
         self.predict(tokenizer, text)
     }
 
-    fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
+    async fn get_tokenizer(options: Self::Options) -> AnyhowResult<Tokenizer> {
         let repo_id = Self::get_tokenizer_repo_info(options);
         let api = Api::new()?;
         let repo = api.repo(Repo::new(repo_id, RepoType::Model));

@@ -4,7 +4,7 @@ use tokenizers::Tokenizer;
 pub trait EmbeddingModel {
     type Options: std::fmt::Debug + Clone;
 
-    fn new(options: Self::Options, device: candle_core::Device) -> anyhow::Result<Self>
+    async fn new(options: Self::Options, device: candle_core::Device) -> anyhow::Result<Self>
     where
         Self: Sized;
 
@@ -22,7 +22,7 @@ pub trait EmbeddingModel {
         Ok(results)
     }
 
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
+    async fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
 
     fn device(&self) -> &candle_core::Device;
 }

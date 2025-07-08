@@ -6,7 +6,7 @@ use super::pipeline::RerankResult;
 pub trait RerankModel {
     type Options: std::fmt::Debug + Clone;
     
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self>
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self>
     where
         Self: Sized;
     
@@ -31,7 +31,7 @@ pub trait RerankModel {
         Ok(results)
     }
     
-    fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
+    async fn get_tokenizer(options: Self::Options) -> anyhow::Result<Tokenizer>;
     
     fn device(&self) -> &Device;
 }

@@ -44,11 +44,11 @@ where
 
     /// Create a new model instance with the given options and device.
     /// This is typically just `M::new(options, device)`.
-    fn create_model(options: Self::Options, device: candle_core::Device) -> Result<M>;
+    async fn create_model(options: Self::Options, device: candle_core::Device) -> Result<M>;
     
     /// Get a tokenizer for the given options.
     /// This is typically just `M::get_tokenizer(options)`.
-    fn get_tokenizer(options: Self::Options) -> Result<tokenizers::Tokenizer>;
+    async fn get_tokenizer(options: Self::Options) -> Result<tokenizers::Tokenizer>;
     
     /// Construct the final pipeline from the model and tokenizer.
     /// This is where each pipeline type provides its specific construction logic.
@@ -71,11 +71,11 @@ where
         
         // Get or create model from cache
         let model = global_cache()
-            .get_or_create(&key, || Self::create_model(self.options().clone(), device.clone()))
+            .get_or_create_async(&key, || async { Self::create_model(self.options().clone(), device.clone()).await })
             .await?;
             
         // Get tokenizer
-        let tokenizer = Self::get_tokenizer(self.options().clone())?;
+        let tokenizer = Self::get_tokenizer(self.options().clone()).await?;
         
         // Construct final pipeline
         Self::construct_pipeline(model, tokenizer)

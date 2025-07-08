@@ -128,17 +128,17 @@ use crate::pipelines::embedding_pipeline::model::EmbeddingModel;
 impl EmbeddingModel for Qwen3EmbeddingModel {
     type Options = Qwen3EmbeddingSize;
 
-    fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
-        futures::executor::block_on(Self::from_hf(&device, options))
+    async fn new(options: Self::Options, device: Device) -> anyhow::Result<Self> {
+        Self::from_hf(&device, options).await
     }
 
     fn embed(&self, tokenizer: &Tokenizer, text: &str) -> anyhow::Result<Vec<f32>> {
         Qwen3EmbeddingModel::embed(self, tokenizer, text)
     }
 
-    fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
+    async fn get_tokenizer(_options: Self::Options) -> anyhow::Result<Tokenizer> {
         let loader = TokenizerLoader::new("Qwen/Qwen3-0.6B", "tokenizer.json");
-        futures::executor::block_on(loader.load())
+        loader.load().await
     }
 
     fn device(&self) -> &Device {
