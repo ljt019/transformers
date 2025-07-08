@@ -1,15 +1,15 @@
-use std::sync::Arc;
 use std::io::{Read, Seek};
+use std::sync::{Arc, Mutex};
 
-use candle_core::quantized::{QMatMul, gguf_file, QTensor};
+use candle_core::quantized::{gguf_file, QMatMul, QTensor};
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Activation, Embedding, Module, kv_cache::KvCache};
+use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
 use tokenizers::Tokenizer;
 
 use crate::loaders::{GgufModelLoader, TokenizerLoader};
+use crate::models::{repeat_kv, RmsNorm};
 use crate::pipelines::reranker_pipeline::model::RerankModel;
 use crate::pipelines::reranker_pipeline::pipeline::RerankResult;
-use crate::models::{RmsNorm, repeat_kv};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Qwen3RerankSize {
@@ -460,7 +460,11 @@ impl ModelWeights {
                         Some(w) => (i + offset) as i64 - j as i64 <= w as i64,
                         None => true,
                     };
-                    if past_ok && sw_ok { 0. } else { minf }
+                    if past_ok && sw_ok {
+                        0.
+                    } else {
+                        minf
+                    }
                 })
             })
             .collect();
@@ -471,7 +475,7 @@ impl ModelWeights {
 /// Qwen3 model for reranking text pairs using cross-encoder architecture.
 #[derive(Clone)]
 pub struct Qwen3RerankModel {
-    weights: Arc<ModelWeights>,
+    weights: Arc<Mutex<ModelWeights>>,
     device: Device,
 }
 
@@ -480,7 +484,9 @@ impl Qwen3RerankModel {
         let (repo_id, file_name) = size.to_id();
         let loader = GgufModelLoader::new(&repo_id, &file_name);
         let (mut file, content) = loader.load().await?;
-        let weights = Arc::new(ModelWeights::from_gguf(content, &mut file, device)?);
+        let weights = Arc::new(Mutex::new(ModelWeights::from_gguf(
+            content, &mut file, device,
+        )?));
         Ok(Self {
             weights,
             device: device.clone(),
@@ -525,7 +531,7 @@ impl Qwen3RerankModel {
         document: &str,
     ) -> anyhow::Result<f32> {
         let instruction = "Given a query, retrieve relevant passages that answer the query";
-        
+
         // Format with system prompt and proper delimiters
         let prefix = "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n";
         let suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
@@ -541,10 +547,9 @@ impl Qwen3RerankModel {
         let token_ids = tokens.get_ids();
 
         // Run a single forward pass to get logits
-        let input = Tensor::new(token_ids, &self.device)?
-            .unsqueeze(0)?;
+        let input = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
 
-        let logits = self.weights.forward(&input, 0)?;
+        let logits = self.weights.lock().unwrap().forward(&input, 0)?;
         let logits = logits.squeeze(0)?;
 
         // Get token IDs for "yes" and "no" for scoring
@@ -552,12 +557,8 @@ impl Qwen3RerankModel {
         let no_token_id = *tokenizer.get_vocab(true).get("no").unwrap() as u32;
 
         // Extract logits for "yes" and "no" tokens
-        let yes_logit = logits
-            .get(yes_token_id as usize)?
-            .to_scalar::<f32>()?;
-        let no_logit = logits
-            .get(no_token_id as usize)?
-            .to_scalar::<f32>()?;
+        let yes_logit = logits.get(yes_token_id as usize)?.to_scalar::<f32>()?;
+        let no_logit = logits.get(no_token_id as usize)?.to_scalar::<f32>()?;
 
         // Compute score as difference (equivalent to binary classification)
         // Higher score means more relevant
