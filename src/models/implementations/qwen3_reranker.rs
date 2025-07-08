@@ -255,13 +255,8 @@ impl AttentionWeights {
 
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // Reset KV cache if we're at the first position
-        if offset == 0 {
-            self.kv_cache.reset();
-        }
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-
-        // Make tensor contiguous to avoid some strided copies
+        // For reranking, we don't need KV cache as each document is processed independently
+        // Directly use k and v without caching
         let k = k.contiguous()?;
         let v = v.contiguous()?;
 
@@ -430,13 +425,11 @@ impl ModelWeights {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
-        let causal_mask = if l == 1 {
-            None
-        } else {
-            Some(self.causal_mask(b, l, offset, None)?)
-        };
+        // For reranking, we don't need causal masking as we process the full sequence
+        // Only use causal mask if explicitly needed (e.g., for autoregressive generation)
+        let causal_mask = None;
         for layer in &mut self.layers {
-            h = layer.forward(&h, causal_mask.as_ref(), offset)?;
+            h = layer.forward(&h, causal_mask, offset)?;
         }
         let h = self.norm.forward(&h)?;
         let _enter = self.span_output.enter();
@@ -479,6 +472,7 @@ pub struct Qwen3RerankModel {
     device: Device,
     yes_token_id: Option<u32>,
     no_token_id: Option<u32>,
+    use_kv_cache: bool, // Add flag to control KV cache usage
 }
 
 impl Qwen3RerankModel {
@@ -497,7 +491,13 @@ impl Qwen3RerankModel {
             device: device.clone(),
             yes_token_id: None,
             no_token_id: None,
+            use_kv_cache: false, // Default to optimized version without KV cache
         })
+    }
+    
+    /// Enable or disable KV cache usage (for performance comparison)
+    pub fn set_use_kv_cache(&mut self, use_kv_cache: bool) {
+        self.use_kv_cache = use_kv_cache;
     }
 
     pub async fn get_tokenizer(&self) -> anyhow::Result<Tokenizer> {
