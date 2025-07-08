@@ -1,16 +1,16 @@
 // Integration tests for zero shot classification pipeline
 // This is a separate crate that tests the public API
 
-use transformers::pipelines::zero_shot_classification_pipeline::*;
-use transformers::pipelines::utils::DeviceSelectable;
 use candle_core::DeviceLocation;
+use transformers::pipelines::utils::BasePipelineBuilder;
+use transformers::pipelines::utils::DeviceSelectable;
+use transformers::pipelines::zero_shot_classification_pipeline::*;
 
 #[tokio::test]
 async fn basic_zero_shot_classification() -> anyhow::Result<()> {
-    let pipeline =
-        ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base)
-            .build()
-            .await?;
+    let pipeline = ZeroShotClassificationPipelineBuilder::modernbert(ModernBertSize::Base)
+        .build()
+        .await?;
     let labels = ["politics", "sports"];
     let res = pipeline.classify("The election results were surprising", &labels)?;
     assert_eq!(res.len(), 2);

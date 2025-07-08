@@ -1,4 +1,5 @@
 use transformers::pipelines::embedding_pipeline::*;
+use transformers::pipelines::utils::BasePipelineBuilder;
 use transformers::pipelines::utils::DeviceSelectable;
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use transformers::pipelines::sentiment_analysis_pipeline::*;
+use transformers::pipelines::utils::BasePipelineBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -14,10 +15,13 @@ async fn main() -> Result<()> {
     let text = "I love my new car";
 
     let result = pipeline.predict(text)?;
-    
+
     println!("\n=== Sentiment Analysis Result ===");
     println!("Text: \"{}\"", text);
-    println!("Sentiment: {} (confidence: {:.4})", result.label, result.score);
+    println!(
+        "Sentiment: {} (confidence: {:.4})",
+        result.label, result.score
+    );
 
     Ok(())
 }

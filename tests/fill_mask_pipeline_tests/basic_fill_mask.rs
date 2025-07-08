@@ -1,9 +1,10 @@
 // Integration tests for fill mask pipeline
 // This is a separate crate that tests the public API
 
-use transformers::pipelines::fill_mask_pipeline::*;
-use transformers::pipelines::utils::DeviceSelectable;
 use candle_core::DeviceLocation;
+use transformers::pipelines::fill_mask_pipeline::*;
+use transformers::pipelines::utils::BasePipelineBuilder;
+use transformers::pipelines::utils::DeviceSelectable;
 
 #[tokio::test]
 async fn basic_fill_mask() -> anyhow::Result<()> {

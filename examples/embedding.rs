@@ -1,5 +1,5 @@
 use anyhow::Result;
-use transformers::pipelines::embedding_pipeline::*;
+use transformers::pipelines::{embedding_pipeline::*, utils::BasePipelineBuilder};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,10 +11,11 @@ async fn main() -> Result<()> {
 
     println!("Pipeline built successfully.");
 
-    let emb_hello_world = pipeline.embed("hello world").await?;
+    let emb_hello_world: Vec<f32> = pipeline.embed("hello world").await?;
 
-    let emb_typical_first_program =
-        pipeline.embed("Typical first program programmers learn to write").await?;
+    let emb_typical_first_program = pipeline
+        .embed("Typical first program programmers learn to write")
+        .await?;
 
     let emb_random_string = pipeline.embed("I like firetrucks").await?;
 

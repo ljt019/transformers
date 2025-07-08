@@ -1,4 +1,5 @@
 use transformers::pipelines::embedding_pipeline::*;
+use transformers::pipelines::utils::BasePipelineBuilder;
 
 #[tokio::test]
 async fn batch_embedding() -> anyhow::Result<()> {
