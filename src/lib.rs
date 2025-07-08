@@ -1,3 +1,10 @@
+//! # Transformers
+//!
+//! A Rust library providing pipelines built on top of the
+//! [`candle`](https://github.com/huggingface/candle) crate for running
+//! large language models locally. See the [README](../README.md) for
+//! full details and usage examples.
+
 pub mod core;
 mod loaders;
 pub mod models;
