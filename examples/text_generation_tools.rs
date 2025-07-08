@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
             .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
             .await?;
 
-    println!("Generating text 1...");
+    println!("\n=== Generation with Both Tools ===");
 
     while let Some(tok) = stream.next().await {
         print!("{}", tok?);
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
             .completion_stream_with_tools("What's the temp and humidity like in Tokyo?")
             .await?;
 
-    println!("Generating text 2...");
+    println!("\n\n=== Generation with Only Humidity Tool ===");
 
     while let Some(tok) = stream.next().await {
         print!("{}", tok?);

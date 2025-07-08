@@ -10,13 +10,13 @@ async fn main() -> Result<()> {
             .build()
             .await?;
 
-    println!("Pipeline built successfully.\n");
+    println!("Pipeline built successfully.");
 
     let text = "I love my new car";
     let candidate_labels = vec!["coding", "reading", "writing", "speaking", "cars"];
 
     // Single-label classification: probabilities sum to 1 (mutually exclusive)
-    println!("=== Single-label Classification (predict) ===");
+    println!("\n=== Single-label Classification (predict) ===");
     println!("Use this when you want to classify text into one of several mutually exclusive categories.");
     println!("Probabilities will sum to 1.0, representing confidence that the text belongs to each category.\n");
 
