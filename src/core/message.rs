@@ -1,7 +1,36 @@
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+/// Role of a message in a chat conversation.
+pub enum Role {
+    /// System messages provide instructions to the model.
+    System,
+    /// User messages are sent from the user to the model.
+    User,
+    /// Assistant messages are responses from the model.
+    Assistant,
+}
+
+impl Role {
+    /// Returns the string representation of the role.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// An individual message in a chat.
 pub struct Message {
-    role: String,
+    role: Role,
     content: String,
 }
 
@@ -12,7 +41,7 @@ impl Message {
     /// It's not recommended to use more than one of these in a given chat.
     pub fn system(content: &str) -> Self {
         Self {
-            role: "system".to_string(),
+            role: Role::System,
             content: content.to_string(),
         }
     }
@@ -22,7 +51,7 @@ impl Message {
     /// User messages are used to send messages from the user to the model.
     pub fn user(content: &str) -> Self {
         Self {
-            role: "user".to_string(),
+            role: Role::User,
             content: content.to_string(),
         }
     }
@@ -32,13 +61,13 @@ impl Message {
     /// Assistant messages are used to store responses from the model.
     pub fn assistant(content: &str) -> Self {
         Self {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content: content.to_string(),
         }
     }
 
     /// Get the role of the message.
-    pub fn role(&self) -> &str {
+    pub fn role(&self) -> &Role {
         &self.role
     }
 
@@ -78,7 +107,7 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
         self.as_ref()
             .iter()
             .rev()
-            .find(|message| message.role() == "user")
+            .find(|message| message.role() == &Role::User)
             .map(|msg| msg.content())
     }
 
@@ -86,14 +115,14 @@ impl<T: AsRef<[Message]>> MessageVecExt for T {
         self.as_ref()
             .iter()
             .rev()
-            .find(|message| message.role() == "assistant")
+            .find(|message| message.role() == &Role::Assistant)
             .map(|msg| msg.content())
     }
 
     fn system(&self) -> Option<&str> {
         self.as_ref()
             .iter()
-            .find(|message| message.role() == "system")
+            .find(|message| message.role() == &Role::System)
             .map(|msg| msg.content())
     }
 }

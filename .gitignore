@@ -2,3 +2,8 @@
 .env
 review.md
 .vscode
+.claude
+
+*.md
+!AGENTS.md
+!README.md

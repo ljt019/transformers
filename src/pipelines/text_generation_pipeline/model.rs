@@ -4,7 +4,6 @@ use candle_core::Tensor;
 // Re-export tool-related types
 pub use super::tools::{ErrorStrategy, IntoTool, Tool, ToolCalling};
 
-
 /// Minimal interface required by the text-generation pipeline for a model context.
 ///
 /// Both `Qwen3Model::Context` and `Gemma3Model::Context` already expose compatible
@@ -25,9 +24,7 @@ pub trait LanguageModelContext: Send {
     fn can_continue_from(&self, position: usize) -> bool;
 }
 
-use async_trait::async_trait;
-
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait TextGenerationModel {
     /// Type used to configure model loading (e.g. which checkpoint size).
     type Options;
@@ -78,4 +75,3 @@ pub trait Reasoning {}
 pub trait ToggleableReasoning {
     fn set_reasoning(&mut self, enable: bool) -> anyhow::Result<()>;
 }
-

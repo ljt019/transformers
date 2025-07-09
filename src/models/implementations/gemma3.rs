@@ -918,7 +918,6 @@ Pipeline stuff
 use crate::pipelines::text_generation_pipeline::model::{
     LanguageModelContext, TextGenerationModel,
 };
-use async_trait::async_trait;
 
 use minijinja::{context, Environment};
 
@@ -942,7 +941,6 @@ impl LanguageModelContext for Context {
     }
 }
 
-#[async_trait]
 impl TextGenerationModel for Gemma3Model {
     type Options = Gemma3Size;
     type Context = Context;

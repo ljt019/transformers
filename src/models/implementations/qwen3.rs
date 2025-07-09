@@ -496,7 +496,9 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_, t) = input_ids.dims2()?;
         if t == 0 {
-            return Err(candle_core::Error::Msg("Input tensor has zero sequence length".to_string()));
+            return Err(candle_core::Error::Msg(
+                "Input tensor has zero sequence length".to_string(),
+            ));
         }
         let mut hidden = self.embeddings.forward(input_ids)?;
         let mut empty_cache = KvCache::new(2, 1024);
@@ -508,7 +510,7 @@ impl ModelWeights {
         let last = hidden.narrow(1, t - 1, 1)?;
         last.squeeze(1)
     }
-  
+
     /// Forward pass returning logits for all tokens in the sequence.
     pub fn forward_logits(
         &self,
@@ -517,7 +519,9 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_, t) = input_ids.dims2()?;
         if t == 0 {
-            return Err(candle_core::Error::Msg("Input tensor has zero sequence length".to_string()));
+            return Err(candle_core::Error::Msg(
+                "Input tensor has zero sequence length".to_string(),
+            ));
         }
         let mut hidden = self.embeddings.forward(input_ids)?;
         let mut empty_cache = KvCache::new(2, 1024);
@@ -526,7 +530,7 @@ impl ModelWeights {
             hidden = layer.forward(&hidden, attention_mask, 0, &mut empty_cache)?;
         }
         hidden = self.final_norm.forward(&hidden)?;
-        
+
         // Get logits for all tokens by applying output projection
         let logits = self.output_projection.forward(&hidden)?;
         Ok(logits)
@@ -891,7 +895,6 @@ impl LanguageModelContext for Context {
     }
 }
 
-#[async_trait]
 impl TextGenerationModel for Qwen3Model {
     type Context = Context;
     type Options = Qwen3Size;
@@ -925,7 +928,11 @@ impl TextGenerationModel for Qwen3Model {
     fn apply_chat_template(&self, messages: &[crate::Message]) -> anyhow::Result<String> {
         // Determine thinking mode
         let mut enable_thinking = self.reasoning;
-        if let Some(last_user_msg) = messages.iter().rev().find(|msg| msg.role() == "user") {
+        if let Some(last_user_msg) = messages
+            .iter()
+            .rev()
+            .find(|msg| msg.role() == &crate::core::message::Role::User)
+        {
             let content = last_user_msg.content();
             if content.contains("/think") {
                 enable_thinking = true;
@@ -939,7 +946,7 @@ impl TextGenerationModel for Qwen3Model {
             .iter()
             .map(|msg| {
                 let mut content = msg.content().to_string();
-                if msg.role() == "user" {
+                if msg.role() == &crate::core::message::Role::User {
                     content = content
                         .replace("/think", "")
                         .replace("/no_think", "")
@@ -947,7 +954,7 @@ impl TextGenerationModel for Qwen3Model {
                         .to_string();
                 }
                 serde_json::json!({
-                    "role": msg.role(),
+                    "role": msg.role().as_str(),
                     "content": content,
                 })
             })
@@ -1000,7 +1007,6 @@ impl ToggleableReasoning for Qwen3Model {
 
 use crate::core::ToolError;
 use crate::pipelines::text_generation_pipeline::model::Tool;
-use async_trait::async_trait;
 
 impl ToolCalling for Qwen3Model {
     fn register_tool(&mut self, tool: Tool) -> anyhow::Result<()> {
@@ -1043,52 +1049,3 @@ impl ToolCalling for Qwen3Model {
         }
     }
 }
-
-/*
-use crate::utils::loaders::HfLoader;
-use minijinja::{context, Environment};
-use serde_json::Value;
-
-use crate::models::generate_tokens_from_prompt;
-use crate::pipelines::TextGenerationModel;
-use crate::Message;
-
-impl TextGenerationModel for Qwen3Model {
-    fn load_tokenizer(&self) -> anyhow::Result<tokenizers::Tokenizer> {
-        let tokenizer = self.get_tokenizer()?;
-
-        Ok(tokenizer)
-    }
-
-    fn get_eos_token_str(&self) -> &str {
-        "<|im_end|>"
-    }
-
-    fn format_prompt(&self, prompt: &str) -> String {
-        format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
-    }
-
-    fn format_messages(&self, messages: Vec<Message>) -> anyhow::Result<String> {
-
-
-    fn prompt_with_tokens(
-        &self,
-        prompt_tokens: &[u32],
-        max_len: usize,
-        eos_token: u32,
-    ) -> anyhow::Result<Vec<u32>> {
-        let mut pipeline_state_guard = self.pipeline_state.write();
-
-        let response_tokens = generate_tokens_from_prompt(
-            prompt_tokens,
-            &self.config.params,
-            &mut *pipeline_state_guard,
-            max_len,
-            &self.config.device,
-            eos_token,
-        )?;
-
-        Ok(response_tokens)
-    }
-}
-*/
