@@ -148,6 +148,55 @@ impl Event {
     }
 }
 
+/// Type of XML tag
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagType {
+    Opening,
+    Closing,
+    SelfClosing,
+}
+
+/// Parsed tag information
+#[derive(Debug, Clone)]
+struct TagInfo {
+    name: String,
+    tag_type: TagType,
+    raw: String,
+}
+
+impl TagInfo {
+    /// Parse tag content into structured information
+    fn parse(tag_content: &str) -> Option<Self> {
+        if tag_content.len() < 3 || !tag_content.starts_with('<') || !tag_content.ends_with('>') {
+            return None;
+        }
+
+        let inner = &tag_content[1..tag_content.len() - 1];
+        
+        if inner.is_empty() {
+            return None;
+        }
+
+        let (tag_type, name) = if let Some(name) = inner.strip_prefix('/') {
+            // Closing tag
+            (TagType::Closing, name.split_whitespace().next()?.to_string())
+        } else if inner.ends_with('/') {
+            // Self-closing tag
+            let name = inner[..inner.len() - 1].split_whitespace().next()?.to_string();
+            (TagType::SelfClosing, name)
+        } else {
+            // Opening tag
+            (TagType::Opening, inner.split_whitespace().next()?.to_string())
+        };
+
+        Some(TagInfo {
+            name,
+            tag_type,
+            raw: tag_content.to_string(),
+        })
+    }
+}
+
 /// Builder for creating an XmlParser with specific tags to watch for
 #[derive(Debug)]
 #[derive(Default)]
@@ -261,79 +310,92 @@ impl XmlParser {
     pub fn parse_token(&self, token: &str) -> Vec<Event> {
         let mut events = Vec::new();
 
+        // Process each character in the token
         for char in token.chars() {
             let mut evs = self.process_char(char);
             events.append(&mut evs);
         }
 
-        // Emit the newly appended slice either for top-level content or for the currently
-        // innermost open tag (if any). This enables true streaming behaviour: callers get
-        // incremental updates instead of the whole block at close time.
-        {
-            let mut state = self
-                .state
-                .lock()
-                .expect("parser lock poisoned");
+        // Emit any incremental content from the current parsing state
+        let mut state = self.state.lock().expect("parser lock poisoned");
+        events.extend(self.emit_incremental_content(&mut state));
 
-            if state.open_tags.is_empty() {
-                // Outside of any registered tag.
-                let current_len = state.content_buffer.len();
-                if current_len > state.emitted_top_len {
-                    let mut new_slice = &state.content_buffer[state.emitted_top_len..];
+        events
+    }
 
-                    // If this is the very first top-level content emission, strip leading newlines.
-                    if state.emitted_top_len == 0 {
-                        new_slice = new_slice.trim_start_matches('\n');
-                    }
+    /// Emit incremental content for streaming output
+    fn emit_incremental_content(&self, state: &mut ParserState) -> Vec<Event> {
+        if state.open_tags.is_empty() {
+            self.emit_incremental_top_level_content(state)
+        } else {
+            self.emit_incremental_tag_content(state)
+        }
+    }
 
-                    // Skip emitting if it is now empty or just whitespace/newlines.
-                    let content_to_emit = if new_slice.trim().is_empty() {
-                        "".to_string()
-                    } else {
-                        new_slice.to_string()
-                    };
+    /// Emit incremental top-level content (outside any registered tags)
+    fn emit_incremental_top_level_content(&self, state: &mut ParserState) -> Vec<Event> {
+        let mut events = Vec::new();
+        let current_len = state.content_buffer.len();
 
-                    if !content_to_emit.is_empty() {
-                        if !state.top_level_open {
-                            events.push(Event::plain_start());
-                            state.top_level_open = true;
-                        }
-                        events.push(Event::content(content_to_emit.clone()));
-                        state.last_content_had_newline = content_to_emit.ends_with('\n');
-                    }
-                    state.emitted_top_len = current_len;
-                }
+        if current_len > state.emitted_top_len {
+            let mut new_slice = &state.content_buffer[state.emitted_top_len..];
+
+            // If this is the very first top-level content emission, strip leading newlines
+            if state.emitted_top_len == 0 {
+                new_slice = new_slice.trim_start_matches('\n');
+            }
+
+            // Skip emitting if it is now empty or just whitespace/newlines
+            let content_to_emit = if new_slice.trim().is_empty() {
+                String::new()
             } else {
-                // Inside the innermost registered tag → stream its delta.
-                if let Some((tag_name_ref, content_ref)) = state.open_tags.last() {
-                    let tag_name = tag_name_ref.clone();
-                    let content = content_ref.clone();
-                    let total_len = content.len();
+                new_slice.to_string()
+            };
 
-                    let already_emitted = *state.emitted_tag_lens.get(&tag_name).unwrap_or(&0);
+            if !content_to_emit.is_empty() {
+                if !state.top_level_open {
+                    events.push(Event::plain_start());
+                    state.top_level_open = true;
+                }
+                events.push(Event::content(content_to_emit.clone()));
+                state.last_content_had_newline = content_to_emit.ends_with('\n');
+            }
+            state.emitted_top_len = current_len;
+        }
 
-                    if total_len > already_emitted {
-                        let new_slice = &content[already_emitted..];
+        events
+    }
 
-                        // Strip leading newlines from the first emission of tag content
-                        if already_emitted == 0 {
-                            let trimmed = new_slice.trim_start_matches('\n');
-                            if !trimmed.is_empty() {
-                                if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                                    events
-                                        .push(Event::tagged_internal(tag_handle.clone(), trimmed));
-                                }
-                            }
-                            // Update emitted length to account for any trimmed newlines
-                            state.emitted_tag_lens.insert(tag_name.clone(), total_len);
-                        } else {
-                            // Not the first emission, emit as-is
-                            if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                                events.push(Event::tagged_internal(tag_handle.clone(), new_slice));
-                            }
-                            state.emitted_tag_lens.insert(tag_name.clone(), total_len);
+    /// Emit incremental content for the innermost registered tag
+    fn emit_incremental_tag_content(&self, state: &mut ParserState) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        if let Some((tag_name_ref, content_ref)) = state.open_tags.last() {
+            let tag_name = tag_name_ref.clone();
+            let content = content_ref.clone();
+            let total_len = content.len();
+
+            let already_emitted = *state.emitted_tag_lens.get(&tag_name).unwrap_or(&0);
+
+            if total_len > already_emitted {
+                let new_slice = &content[already_emitted..];
+
+                // Strip leading newlines from the first emission of tag content
+                if already_emitted == 0 {
+                    let trimmed = new_slice.trim_start_matches('\n');
+                    if !trimmed.is_empty() {
+                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                            events.push(Event::tagged_internal(tag_handle.clone(), trimmed));
                         }
                     }
+                    // Update emitted length to account for any trimmed newlines
+                    state.emitted_tag_lens.insert(tag_name.clone(), total_len);
+                } else {
+                    // Not the first emission, emit as-is
+                    if let Some(tag_handle) = self.tag_map.get(&tag_name) {
+                        events.push(Event::tagged_internal(tag_handle.clone(), new_slice));
+                    }
+                    state.emitted_tag_lens.insert(tag_name.clone(), total_len);
                 }
             }
         }
@@ -381,115 +443,140 @@ impl XmlParser {
 
     /// Handle a complete tag and return an event if one is ready
     fn handle_tag(&self, state: &mut ParserState, tag_content: &str) -> Vec<Event> {
+        match TagInfo::parse(tag_content) {
+            Some(tag_info) => {
+                if self.registered_tags.contains(&tag_info.name) {
+                    match tag_info.tag_type {
+                        TagType::Closing => self.handle_closing_tag(state, &tag_info.name),
+                        TagType::Opening => self.handle_opening_tag(state, &tag_info.name),
+                        TagType::SelfClosing => Vec::new(), // Registered self-closing tags are ignored
+                    }
+                } else {
+                    self.handle_unregistered_tag(state, tag_content)
+                }
+            }
+            None => self.handle_invalid_tag(state, tag_content),
+        }
+    }
+
+    /// Handle a closing tag for a registered tag
+    fn handle_closing_tag(&self, state: &mut ParserState, tag_name: &str) -> Vec<Event> {
         let mut events = Vec::new();
 
-        if let Some(tag_name) = self.parse_tag_name(tag_content) {
-            if self.registered_tags.contains(&tag_name) {
-                if tag_content.starts_with("</") {
-                    if let Some(pos) = state
-                        .open_tags
-                        .iter()
-                        .rposition(|(name, _)| name == &tag_name)
-                    {
-                        let (_, content) = state.open_tags.remove(pos);
+        if let Some(pos) = state.open_tags.iter().rposition(|(name, _)| name == tag_name) {
+            let (_, content) = state.open_tags.remove(pos);
+            let already_emitted = state.emitted_tag_lens.remove(tag_name).unwrap_or(0);
 
-                        let already_emitted = state.emitted_tag_lens.remove(&tag_name).unwrap_or(0);
-
-                        if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                            if content.len() > already_emitted {
-                                let remaining_content = &content[already_emitted..];
-                                // Strip leading newlines if this is the first content emission
-                                let content_to_emit = if already_emitted == 0 {
-                                    remaining_content.trim_start_matches('\n')
-                                } else {
-                                    remaining_content
-                                };
-
-                                // Also strip trailing newlines from the final emission
-                                let trimmed = content_to_emit.trim_end_matches('\n');
-                                if !trimmed.is_empty() {
-                                    let mut final_str = trimmed.to_string();
-                                    final_str.push('\n'); // ensure exactly one trailing newline
-                                    events.push(Event::tagged_internal(
-                                        tag_handle.clone(),
-                                        final_str,
-                                    ));
-                                }
-                            }
-                            events.push(Event::end(tag_handle.clone()));
-                        }
-                    }
-                } else if !tag_content.ends_with("/>") {
-                    if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
-                        let content = &state.content_buffer[state.emitted_top_len..];
-
-                        // Normalize whitespace before tag start
-                        let mut slice = content;
-                        if state.emitted_top_len == 0 {
-                            slice = slice.trim_start_matches('\n');
-                        }
-                        let content_to_emit = if slice.trim().is_empty() {
-                            String::new()
-                        } else {
-                            // Ensure top-level content ends with exactly one newline
-                            let mut content_str = slice.to_string();
-                            if !content_str.ends_with('\n') {
-                                content_str.push('\n');
-                            }
-                            content_str
-                        };
-
-                        state.emitted_top_len = state.content_buffer.len();
-                        if !content_to_emit.is_empty() {
-                            if !state.top_level_open {
-                                events.push(Event::plain_start());
-                                state.top_level_open = true;
-                            }
-                            events.push(Event::content(content_to_emit.clone()));
-                            state.last_content_had_newline = content_to_emit.ends_with('\n');
-                        }
-                    }
-
-                    state.open_tags.push((tag_name.clone(), String::new()));
-
-                    if let Some(tag_handle) = self.tag_map.get(&tag_name) {
-                        events.push(Event::start(tag_handle.clone()));
-                    }
+            if let Some(tag_handle) = self.tag_map.get(tag_name) {
+                // Emit any remaining content for this tag
+                let final_content = self.prepare_final_tag_content(&content, already_emitted);
+                if !final_content.is_empty() {
+                    events.push(Event::tagged_internal(tag_handle.clone(), final_content));
                 }
-            } else if state.open_tags.is_empty() {
-                state.content_buffer.push_str(tag_content);
-            } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
-                content.push_str(tag_content);
+                events.push(Event::end(tag_handle.clone()));
             }
-        } else if state.open_tags.is_empty() {
-            state.content_buffer.push_str(tag_content);
-        } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
-            content.push_str(tag_content);
         }
 
         events
     }
 
-    /// Extract tag name from tag content (e.g., "<think>" -> "think", "</think>" -> "think")
-    fn parse_tag_name(&self, tag_content: &str) -> Option<String> {
-        if tag_content.len() < 3 || !tag_content.starts_with('<') || !tag_content.ends_with('>') {
-            return None;
+    /// Handle an opening tag for a registered tag
+    fn handle_opening_tag(&self, state: &mut ParserState, tag_name: &str) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        // Emit any pending top-level content before starting a new tag
+        if state.open_tags.is_empty() && !state.content_buffer.is_empty() {
+            events.extend(self.emit_pending_top_level_content(state));
         }
 
-        let inner = &tag_content[1..tag_content.len() - 1];
+        state.open_tags.push((tag_name.to_string(), String::new()));
 
-        if let Some(name) = inner.strip_prefix('/') {
-            // Closing tag
-            Some(name.split_whitespace().next()?.to_string())
+        if let Some(tag_handle) = self.tag_map.get(tag_name) {
+            events.push(Event::start(tag_handle.clone()));
+        }
+
+        events
+    }
+
+    /// Handle an unregistered tag (treat as content)
+    fn handle_unregistered_tag(&self, state: &mut ParserState, tag_content: &str) -> Vec<Event> {
+        if state.open_tags.is_empty() {
+            state.content_buffer.push_str(tag_content);
+        } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+            content.push_str(tag_content);
+        }
+        Vec::new()
+    }
+
+    /// Handle invalid tag syntax (treat as content)
+    fn handle_invalid_tag(&self, state: &mut ParserState, tag_content: &str) -> Vec<Event> {
+        if state.open_tags.is_empty() {
+            state.content_buffer.push_str(tag_content);
+        } else if let Some((_, ref mut content)) = state.open_tags.last_mut() {
+            content.push_str(tag_content);
+        }
+        Vec::new()
+    }
+
+    /// Prepare final content for a closing tag, handling newline normalization
+    fn prepare_final_tag_content(&self, content: &str, already_emitted: usize) -> String {
+        if content.len() <= already_emitted {
+            return String::new();
+        }
+
+        let remaining_content = &content[already_emitted..];
+        
+        // Strip leading newlines if this is the first content emission
+        let content_to_emit = if already_emitted == 0 {
+            remaining_content.trim_start_matches('\n')
         } else {
-            // Opening tag or self-closing tag
-            let name = inner.split_whitespace().next()?;
-            if let Some(stripped) = name.strip_suffix('/') {
-                Some(stripped.to_string())
-            } else {
-                Some(name.to_string())
-            }
+            remaining_content
+        };
+
+        // Strip trailing newlines from the final emission
+        let trimmed = content_to_emit.trim_end_matches('\n');
+        if trimmed.is_empty() {
+            String::new()
+        } else {
+            let mut final_str = trimmed.to_string();
+            final_str.push('\n'); // ensure exactly one trailing newline
+            final_str
         }
+    }
+
+    /// Emit any pending top-level content
+    fn emit_pending_top_level_content(&self, state: &mut ParserState) -> Vec<Event> {
+        let mut events = Vec::new();
+        let content = &state.content_buffer[state.emitted_top_len..];
+
+        // Normalize whitespace before tag start
+        let mut slice = content;
+        if state.emitted_top_len == 0 {
+            slice = slice.trim_start_matches('\n');
+        }
+
+        let content_to_emit = if slice.trim().is_empty() {
+            String::new()
+        } else {
+            // Ensure top-level content ends with exactly one newline
+            let mut content_str = slice.to_string();
+            if !content_str.ends_with('\n') {
+                content_str.push('\n');
+            }
+            content_str
+        };
+
+        state.emitted_top_len = state.content_buffer.len();
+        if !content_to_emit.is_empty() {
+            if !state.top_level_open {
+                events.push(Event::plain_start());
+                state.top_level_open = true;
+            }
+            events.push(Event::content(content_to_emit.clone()));
+            state.last_content_had_newline = content_to_emit.ends_with('\n');
+        }
+
+        events
     }
 
     /// Flush any remaining content and return events

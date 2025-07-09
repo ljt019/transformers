@@ -1,26 +1,15 @@
 use super::model::RerankModel;
 use super::pipeline::RerankPipeline;
 use crate::core::ModelOptions;
-use crate::pipelines::utils::{BasePipelineBuilder, DeviceRequest, DeviceSelectable, StandardPipelineBuilder};
+use crate::pipelines::utils::{BasePipelineBuilder, StandardPipelineBuilder};
 use std::sync::Arc;
 
-pub struct RerankPipelineBuilder<M: RerankModel>(StandardPipelineBuilder<M::Options>);
+/// Builder for reranker pipelines
+pub type RerankPipelineBuilder<M> = StandardPipelineBuilder<<M as RerankModel>::Options>;
 
-impl<M: RerankModel> RerankPipelineBuilder<M> {
-    pub fn new(options: M::Options) -> Self {
-        Self(StandardPipelineBuilder::new(options))
-    }
-}
-
-impl<M: RerankModel> DeviceSelectable for RerankPipelineBuilder<M> {
-    fn device_request_mut(&mut self) -> &mut DeviceRequest {
-        self.0.device_request_mut()
-    }
-}
-
-impl<M: RerankModel> BasePipelineBuilder<M> for RerankPipelineBuilder<M>
+impl<M> BasePipelineBuilder<M> for StandardPipelineBuilder<M::Options>
 where
-    M: Clone + Send + Sync + 'static,
+    M: RerankModel + Clone + Send + Sync + 'static,
     M::Options: ModelOptions + Clone,
 {
     type Model = M;
@@ -28,11 +17,11 @@ where
     type Options = M::Options;
 
     fn options(&self) -> &Self::Options {
-        &self.0.options
+        &self.options
     }
     
-    fn device_request(&self) -> &DeviceRequest {
-        &self.0.device_request
+    fn device_request(&self) -> &crate::pipelines::utils::DeviceRequest {
+        &self.device_request
     }
 
     fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
@@ -51,7 +40,7 @@ where
     }
 }
 
-impl RerankPipelineBuilder<crate::models::implementations::qwen3_reranker::Qwen3RerankModel> {
+impl StandardPipelineBuilder<crate::models::implementations::qwen3_reranker::Qwen3RerankSize> {
     pub fn qwen3(size: crate::models::implementations::qwen3_reranker::Qwen3RerankSize) -> Self {
         Self::new(size)
     }

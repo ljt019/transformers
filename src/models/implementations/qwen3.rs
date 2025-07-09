@@ -7,13 +7,21 @@
 //! - GPU acceleration via Candle framework
 //!
 
-use crate::models::RmsNorm;
-use candle_core::quantized::{gguf_file, QMatMul};
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
-use minijinja::UndefinedBehavior;
-use minijinja::{context, Environment};
-use minijinja_contrib::{add_to_environment, pycompat};
+use crate::core::cache::ModelOptions;
+use crate::loaders::GenerationConfig;
+use crate::models::components::{
+    attention::KvCache, 
+    Embedding, QMatMul, RmsNorm, VarBuilder,
+    common_layers::{RoPE, RoPEParams, Qwen3RoPEParams, FeedForward as CommonFeedForward, Attention as CommonAttention, AttentionConfig}
+};
+use crate::pipelines::text_generation_pipeline::Tool;
+use crate::Message;
+use anyhow::anyhow;
+use async_trait::async_trait;
+use candle_core::{quantized::gguf_file, DType, Device, IndexOp, Module, Result, Tensor, D};
+use minijinja::{context, Environment, UndefinedBehavior};
+use minijinja_contrib::pycompat;
+use std::collections::HashMap;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -22,274 +30,29 @@ use tokenizers::Tokenizer;
 const DEFAULT_CACHE_SIZE: usize = 64;
 const KV_CACHE_DIMS: usize = 2;
 
+// Type aliases for readability
+type Qwen3RoPE = RoPE<Qwen3RoPEParams>;
+type Qwen3Attention = CommonAttention<Qwen3RoPEParams>;
+type FeedForward = CommonFeedForward;
+
 /// Repeats a key or value tensor for grouped query attention
 /// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
 pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
-        Ok(xs)
-    } else {
-        let (b_sz, n_kv_head, seq_len, head_dim) = xs.dims4()?;
-        // Using cat is faster than a broadcast as it avoids going through a potentially
-        // strided copy.
-        // https://github.com/huggingface/candle/pull/2043
-        Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+        return Ok(xs);
     }
+    let (b_sz, n_kv_head, seq_len, head_dim) = xs.dims4()?;
+    let xs = xs
+        .unsqueeze(2)?
+        .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
+        .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
+    Ok(xs)
 }
 
-/// Rotary Position Embedding (RoPE) implementation.
-#[derive(Debug, Clone)]
-struct RoPE {
-    cos: Tensor,
-    sin: Tensor,
-}
-
-impl RoPE {
-    fn new(
-        dtype: DType,
-        head_dim: usize,
-        max_seq_len: usize,
-        theta: f64,
-        device: &Device,
-    ) -> Result<Self> {
-        let inv_freq: Vec<f32> = (0..head_dim)
-            .step_by(2)
-            .map(|i| (1.0 / theta.powf(i as f64 / head_dim as f64)) as f32)
-            .collect();
-
-        // Compute the length first to avoid borrowing after move.
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?.to_dtype(dtype)?;
-        let positions = Tensor::arange(0u32, max_seq_len as u32, device)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let angles = positions.matmul(&inv_freq)?;
-
-        Ok(Self {
-            cos: angles.cos()?,
-            sin: angles.sin()?,
-        })
-    }
-
-    /// Apply rotary embeddings to query and key tensors.
-    /// Shape: (batch, num_heads, seq_len, head_dim)
-    fn apply(&self, q: &Tensor, k: &Tensor, position_offset: usize) -> Result<(Tensor, Tensor)> {
-        let seq_len = q.dim(2)?;
-        let cos = self
-            .cos
-            .narrow(0, position_offset, seq_len)?
-            .to_dtype(q.dtype())?;
-        let sin = self
-            .sin
-            .narrow(0, position_offset, seq_len)?
-            .to_dtype(q.dtype())?;
-
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        Ok((q_embed, k_embed))
-    }
-}
-
-/// Feed-forward network with SwiGLU activation.
-#[derive(Debug, Clone)]
-struct FeedForward {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
-    down_proj: QMatMul,
-}
-
-impl FeedForward {
-    fn load<R: Read + Seek>(
-        content: &gguf_file::Content,
-        reader: &mut R,
-        layer_prefix: &str,
-        device: &Device,
-    ) -> Result<Self> {
-        let gate_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.ffn_gate.weight"),
-            device,
-        )?)?;
-        let up_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.ffn_up.weight"),
-            device,
-        )?)?;
-        let down_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.ffn_down.weight"),
-            device,
-        )?)?;
-
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-        })
-    }
-}
-
-impl Module for FeedForward {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(x)?.apply(&Activation::Silu)?;
-        let up = self.up_proj.forward(x)?;
-        let hidden = (gate * up)?;
-        self.down_proj.forward(&hidden)
-    }
-}
-
-/// Multi-head attention with Grouped Query Attention support.
-#[derive(Debug)]
-struct Attention {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
-    o_proj: QMatMul,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
-    num_heads: usize,
-    num_kv_heads: usize,
-    head_dim: usize,
-    rope: Arc<RoPE>,
-}
-
-impl Attention {
-    fn load<R: Read + Seek>(
-        content: &gguf_file::Content,
-        reader: &mut R,
-        layer_prefix: &str,
-        num_heads: usize,
-        num_kv_heads: usize,
-        head_dim: usize,
-        rope: Arc<RoPE>,
-        rms_eps: f64,
-        device: &Device,
-    ) -> Result<Self> {
-        let q_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.attn_q.weight"),
-            device,
-        )?)?;
-        let k_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.attn_k.weight"),
-            device,
-        )?)?;
-        let v_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.attn_v.weight"),
-            device,
-        )?)?;
-        let o_proj = QMatMul::from_qtensor(content.tensor(
-            reader,
-            &format!("{layer_prefix}.attn_output.weight"),
-            device,
-        )?)?;
-
-        let q_norm = RmsNorm::from_qtensor(
-            content.tensor(
-                reader,
-                &format!("{layer_prefix}.attn_q_norm.weight"),
-                device,
-            )?,
-            rms_eps,
-        )?;
-        let k_norm = RmsNorm::from_qtensor(
-            content.tensor(
-                reader,
-                &format!("{layer_prefix}.attn_k_norm.weight"),
-                device,
-            )?,
-            rms_eps,
-        )?;
-
-        Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
-            q_norm,
-            k_norm,
-            num_heads,
-            num_kv_heads,
-            head_dim,
-            rope,
-        })
-    }
-
-    fn forward(
-        &self,
-        hidden_states: &Tensor,
-        attention_mask: Option<&Tensor>,
-        position_offset: usize,
-        kv_cache: &mut KvCache,
-    ) -> Result<Tensor> {
-        let (batch, seq_len, _) = hidden_states.dims3()?;
-
-        // Project to Q, K, V
-        let queries = self
-            .q_proj
-            .forward(hidden_states)?
-            .reshape((batch, seq_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?; // (batch, num_heads, seq_len, head_dim)
-
-        let keys = self
-            .k_proj
-            .forward(hidden_states)?
-            .reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        let values = self
-            .v_proj
-            .forward(hidden_states)?
-            .reshape((batch, seq_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        // Apply Q/K normalization
-        let q_flat = queries.flatten(0, 2)?;
-        let k_flat = keys.flatten(0, 2)?;
-        let q_normed = self.q_norm.forward(&q_flat)?.reshape(queries.shape())?;
-        let k_normed = self.k_norm.forward(&k_flat)?.reshape(keys.shape())?;
-
-        // Apply RoPE
-        let (queries, keys) = self.rope.apply(&q_normed, &k_normed, position_offset)?;
-
-        // Update KV cache
-        if position_offset == 0 {
-            kv_cache.reset();
-        }
-        let (keys, values) = kv_cache.append(&keys.contiguous()?, &values.contiguous()?)?;
-
-        // Expand KV for Grouped Query Attention
-        let num_groups = self.num_heads / self.num_kv_heads;
-
-        let keys = repeat_kv(keys, num_groups)?.contiguous()?;
-        let values = repeat_kv(values, num_groups)?.contiguous()?;
-
-        // Compute attention
-        let scale = (self.head_dim as f64).sqrt().recip();
-        let mut attention_scores = (queries.matmul(&keys.transpose(2, 3)?)? * scale)?;
-
-        if let Some(mask) = attention_mask {
-            attention_scores = attention_scores.broadcast_add(mask)?;
-        }
-
-        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
-        let context = attention_probs.matmul(&values)?;
-
-        // Reshape and project output
-        let output =
-            context
-                .transpose(1, 2)?
-                .reshape((batch, seq_len, self.num_heads * self.head_dim))?;
-
-        self.o_proj.forward(&output)
-    }
-}
-
-/// Single transformer layer with pre-normalization.
+/// Transformer layer containing attention and feed-forward sub-layers.
 #[derive(Debug)]
 struct TransformerLayer {
-    attention: Attention,
+    attention: Qwen3Attention,
     feed_forward: FeedForward,
     attention_norm: RmsNorm,
     ffn_norm: RmsNorm,
@@ -303,24 +66,39 @@ impl TransformerLayer {
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
-        rope: Arc<RoPE>,
+        rope: Arc<Qwen3RoPE>,
         rms_eps: f64,
         device: &Device,
     ) -> Result<Self> {
+        use crate::models::components::common_layers::WeightNaming;
+        
         let prefix = format!("blk.{layer_idx}");
+        let naming = WeightNaming::qwen3();
 
-        let attention = Attention::load(
+        let attention = Qwen3Attention::load_with_naming(
             content,
             reader,
             &prefix,
-            num_heads,
-            num_kv_heads,
-            head_dim,
+            AttentionConfig {
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                sliding_window_size: None,
+                rms_eps,
+            },
             rope,
-            rms_eps,
             device,
+            true, // use_qk_norm
+            &naming,
         )?;
-        let feed_forward = FeedForward::load(content, reader, &prefix, device)?;
+
+        let feed_forward = FeedForward::load_with_naming(
+            content,
+            reader,
+            &prefix,
+            device,
+            &naming,
+        )?;
 
         let attention_norm = RmsNorm::from_qtensor(
             content.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
@@ -360,7 +138,7 @@ impl TransformerLayer {
     }
 }
 
-/// Shared model weights that can be used across multiple inference contexts.
+/// Main model weights structure containing all layers.
 pub struct ModelWeights {
     embeddings: Embedding,
     layers: Vec<TransformerLayer>,
@@ -372,53 +150,71 @@ pub struct ModelWeights {
 }
 
 impl ModelWeights {
-    /// Load model weights from a GGUF file.
+    /// Load model weights from GGUF format.
     pub fn from_gguf<R: Read + Seek>(
         content: gguf_file::Content,
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        // Helper for metadata access
-        let get_metadata = |key: &str| -> Result<&gguf_file::Value> {
-            content
-                .metadata
-                .get(key)
-                .ok_or_else(|| candle_core::Error::Msg(format!("Missing metadata key: {key}")))
-        };
-
-        // Parse model configuration
-        let num_heads = get_metadata("qwen3.attention.head_count")?.to_u32()? as usize;
-        let num_kv_heads = get_metadata("qwen3.attention.head_count_kv")?.to_u32()? as usize;
-        let head_dim = get_metadata("qwen3.attention.key_length")?.to_u32()? as usize;
-        let num_layers = get_metadata("qwen3.block_count")?.to_u32()? as usize;
-        let hidden_size = get_metadata("qwen3.embedding_length")?.to_u32()? as usize;
-        let max_seq_len = get_metadata("qwen3.context_length")?.to_u32()? as usize;
-        let rms_eps = get_metadata("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let rope_theta = get_metadata("qwen3.rope.freq_base")?.to_f32()? as f64;
-
-        let dtype = match content.metadata.get("general.dtype") {
-            Some(v) => match v.to_u32().unwrap_or(1) {
-                0 => DType::F32,
-                1 => DType::F16,
+        let metadata = &content.metadata;
+        let dtype = metadata
+            .get("general.file_type")
+            .and_then(|v| v.to_u32().ok())
+            .map(|v| match v {
+                2 => DType::F32,
                 _ => DType::F16,
-            },
-            None => DType::F16,
-        };
+            })
+            .unwrap_or(DType::F32);
+
+        // Model configuration from metadata
+        let num_layers = metadata
+            .get("llm.block_count")
+            .ok_or_else(|| anyhow!("missing layer count"))?
+            .to_u32()? as usize;
+        let num_heads = metadata
+            .get("llm.attention.head_count")
+            .ok_or_else(|| anyhow!("missing head count"))?
+            .to_u32()? as usize;
+        let num_kv_heads = metadata
+            .get("llm.attention.head_count_kv")
+            .ok_or_else(|| anyhow!("missing kv head count"))?
+            .to_u32()? as usize;
+        let head_dim = metadata
+            .get("llm.rope.dimension_count")
+            .ok_or_else(|| anyhow!("missing head dimension"))?
+            .to_u32()? as usize;
+        let rms_eps = metadata
+            .get("llm.attention.layer_norm_rms_epsilon")
+            .ok_or_else(|| anyhow!("missing rms epsilon"))?
+            .to_f32()? as f64;
+        let max_seq_len = metadata
+            .get("llm.context_length")
+            .and_then(|v| v.to_u32().ok())
+            .unwrap_or(2048) as usize;
+
+        // Create shared RoPE instance
+        let rope = Arc::new(Qwen3RoPE::new(
+            dtype,
+            head_dim,
+            max_seq_len,
+            Qwen3RoPEParams,
+            device,
+        )?);
 
         // Load embeddings
-        let embed_tensor = content.tensor(reader, "token_embd.weight", device)?;
-        let embeddings = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
-
-        // Create RoPE
-        let rope = Arc::new(RoPE::new(dtype, head_dim, max_seq_len, rope_theta, device)?);
+        let embeddings = {
+            let tensor = content.tensor(reader, "token_embd.weight", device)?;
+            let weight = tensor.dequantize(device)?;
+            Embedding::new(weight, weight.dim(1)?)
+        };
 
         // Load transformer layers
         let mut layers = Vec::with_capacity(num_layers);
-        for i in 0..num_layers {
+        for layer_idx in 0..num_layers {
             layers.push(TransformerLayer::load(
                 &content,
                 reader,
-                i,
+                layer_idx,
                 num_heads,
                 num_kv_heads,
                 head_dim,
@@ -433,11 +229,9 @@ impl ModelWeights {
             content.tensor(reader, "output_norm.weight", device)?,
             rms_eps,
         )?;
-
-        let output_tensor = content
-            .tensor(reader, "output.weight", device)
-            .or_else(|_| content.tensor(reader, "token_embd.weight", device))?; // Fallback to tied weights
-        let output_projection = QMatMul::from_qtensor(output_tensor)?;
+        let output_projection = QMatMul::from_weights(
+            content.tensor(reader, "output.weight", device)?,
+        )?;
 
         Ok(Self {
             embeddings,

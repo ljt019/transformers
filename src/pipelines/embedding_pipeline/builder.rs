@@ -1,26 +1,15 @@
 use super::model::EmbeddingModel;
 use super::pipeline::EmbeddingPipeline;
 use crate::core::ModelOptions;
-use crate::pipelines::utils::{BasePipelineBuilder, DeviceRequest, DeviceSelectable, StandardPipelineBuilder};
+use crate::pipelines::utils::{BasePipelineBuilder, StandardPipelineBuilder};
 use std::sync::Arc;
 
-pub struct EmbeddingPipelineBuilder<M: EmbeddingModel>(StandardPipelineBuilder<M::Options>);
+/// Builder for embedding pipelines
+pub type EmbeddingPipelineBuilder<M> = StandardPipelineBuilder<<M as EmbeddingModel>::Options>;
 
-impl<M: EmbeddingModel> EmbeddingPipelineBuilder<M> {
-    pub fn new(options: M::Options) -> Self {
-        Self(StandardPipelineBuilder::new(options))
-    }
-}
-
-impl<M: EmbeddingModel> DeviceSelectable for EmbeddingPipelineBuilder<M> {
-    fn device_request_mut(&mut self) -> &mut DeviceRequest {
-        self.0.device_request_mut()
-    }
-}
-
-impl<M: EmbeddingModel> BasePipelineBuilder<M> for EmbeddingPipelineBuilder<M>
+impl<M> BasePipelineBuilder<M> for StandardPipelineBuilder<M::Options>
 where
-    M: Clone + Send + Sync + 'static,
+    M: EmbeddingModel + Clone + Send + Sync + 'static,
     M::Options: ModelOptions + Clone,
 {
     type Model = M;
@@ -28,11 +17,11 @@ where
     type Options = M::Options;
 
     fn options(&self) -> &Self::Options {
-        &self.0.options
+        &self.options
     }
     
-    fn device_request(&self) -> &DeviceRequest {
-        &self.0.device_request
+    fn device_request(&self) -> &crate::pipelines::utils::DeviceRequest {
+        &self.device_request
     }
 
     fn create_model(options: Self::Options, device: candle_core::Device) -> anyhow::Result<M> {
@@ -51,7 +40,7 @@ where
     }
 }
 
-impl EmbeddingPipelineBuilder<crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingModel> {
+impl StandardPipelineBuilder<crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingSize> {
     pub fn qwen3(size: crate::models::implementations::qwen3_embeddings::Qwen3EmbeddingSize) -> Self {
         Self::new(size)
     }
