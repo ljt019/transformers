@@ -332,38 +332,66 @@ impl XmlParser {
         }
     }
 
+    /// Helper to emit top-level content with consistent formatting
+    fn emit_top_level_content_slice(
+        &self,
+        state: &mut ParserState,
+        slice: &str,
+        is_first: bool,
+        ensure_trailing_newline: bool,
+        trim_trailing: bool,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        
+        // Strip leading newlines if first emission
+        let mut content = if is_first {
+            slice.trim_start_matches('\n')
+        } else {
+            slice
+        };
+
+        // Strip trailing newlines if requested (used in flush)
+        if trim_trailing {
+            content = content.trim_end_matches('\n');
+        }
+        
+        let content_to_emit = if content.trim().is_empty() {
+            String::new()
+        } else if ensure_trailing_newline && !content.ends_with('\n') {
+            // Ensure content ends with exactly one newline
+            let mut content_str = content.to_string();
+            content_str.push('\n');
+            content_str
+        } else {
+            content.to_string()
+        };
+        
+        if !content_to_emit.is_empty() {
+            if !state.top_level_open {
+                events.push(Event::plain_start());
+                state.top_level_open = true;
+            }
+            events.push(Event::content(content_to_emit.clone()));
+            state.last_content_had_newline = content_to_emit.ends_with('\n');
+        }
+        
+        events
+    }
+
     /// Emit incremental top-level content (outside any registered tags)
     fn emit_incremental_top_level_content(&self, state: &mut ParserState) -> Vec<Event> {
-        let mut events = Vec::new();
         let current_len = state.content_buffer.len();
 
         if current_len > state.emitted_top_len {
-            let mut new_slice = &state.content_buffer[state.emitted_top_len..];
-
-            // If this is the very first top-level content emission, strip leading newlines
-            if state.emitted_top_len == 0 {
-                new_slice = new_slice.trim_start_matches('\n');
-            }
-
-            // Skip emitting if it is now empty or just whitespace/newlines
-            let content_to_emit = if new_slice.trim().is_empty() {
-                String::new()
-            } else {
-                new_slice.to_string()
-            };
-
-            if !content_to_emit.is_empty() {
-                if !state.top_level_open {
-                    events.push(Event::plain_start());
-                    state.top_level_open = true;
-                }
-                events.push(Event::content(content_to_emit.clone()));
-                state.last_content_had_newline = content_to_emit.ends_with('\n');
-            }
+            let new_slice = &state.content_buffer[state.emitted_top_len..];
+            let is_first = state.emitted_top_len == 0;
+            
+            let events = self.emit_top_level_content_slice(state, new_slice, is_first, false, false);
             state.emitted_top_len = current_len;
+            events
+        } else {
+            Vec::new()
         }
-
-        events
     }
 
     /// Emit incremental content for the innermost registered tag
@@ -546,37 +574,16 @@ impl XmlParser {
 
     /// Emit any pending top-level content
     fn emit_pending_top_level_content(&self, state: &mut ParserState) -> Vec<Event> {
-        let mut events = Vec::new();
-        let content = &state.content_buffer[state.emitted_top_len..];
-
-        // Normalize whitespace before tag start
-        let mut slice = content;
-        if state.emitted_top_len == 0 {
-            slice = slice.trim_start_matches('\n');
-        }
-
-        let content_to_emit = if slice.trim().is_empty() {
-            String::new()
+        if state.content_buffer.len() > state.emitted_top_len {
+            let content = &state.content_buffer[state.emitted_top_len..];
+            let is_first = state.emitted_top_len == 0;
+            
+            let events = self.emit_top_level_content_slice(state, content, is_first, true, false);
+            state.emitted_top_len = state.content_buffer.len();
+            events
         } else {
-            // Ensure top-level content ends with exactly one newline
-            let mut content_str = slice.to_string();
-            if !content_str.ends_with('\n') {
-                content_str.push('\n');
-            }
-            content_str
-        };
-
-        state.emitted_top_len = state.content_buffer.len();
-        if !content_to_emit.is_empty() {
-            if !state.top_level_open {
-                events.push(Event::plain_start());
-                state.top_level_open = true;
-            }
-            events.push(Event::content(content_to_emit.clone()));
-            state.last_content_had_newline = content_to_emit.ends_with('\n');
+            Vec::new()
         }
-
-        events
     }
 
     /// Flush any remaining content and return events
@@ -587,34 +594,15 @@ impl XmlParser {
             .expect("parser lock poisoned");
         let mut events = Vec::new();
 
-        // Emit any remaining content
+        // Emit any remaining top-level content
         if state.content_buffer.len() > state.emitted_top_len {
             let remaining = &state.content_buffer[state.emitted_top_len..];
-
-            // Always trim leading and trailing newlines from final content
-            let slice = remaining.trim_start_matches('\n').trim_end_matches('\n');
-
-            let content_to_emit = if slice.trim().is_empty() {
-                String::new()
-            } else {
-                // Ensure top-level content ends with exactly one newline
-                let mut content_str = slice.to_string();
-                if !content_str.ends_with('\n') {
-                    content_str.push('\n');
-                }
-                content_str
-            };
-
+            
+            // For flush, we always trim both leading and trailing newlines and ensure one trailing
+            events.extend(self.emit_top_level_content_slice(state, remaining, true, true, true));
             state.emitted_top_len = state.content_buffer.len();
-            if !content_to_emit.is_empty() {
-                if !state.top_level_open {
-                    events.push(Event::plain_start());
-                    state.top_level_open = true;
-                }
-                events.push(Event::content(content_to_emit.clone()));
-                state.last_content_had_newline = content_to_emit.ends_with('\n');
-            }
         }
+
         if state.top_level_open {
             // For streaming case: add a trailing newline if the last content didn't have one
             if !state.last_content_had_newline {
